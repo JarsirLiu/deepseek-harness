@@ -1,0 +1,15 @@
+# @deepseek-ai/dsh-hub-client bundle patch: mounts the remote session provider
+# plugin, implementing SessionPersistence by forwarding all operations to a
+# remote hub server over WebSocket JSON-RPC.
+#
+# The row is disabled by default because `uri` is a required config field.
+# The user enables it and supplies the remote server URI before starting.
+
+- insert:
+    - id: hub-client
+      name: '@deepseek-ai/dsh-hub-client'
+      disabled: true
+      config:
+        uri: ''
+        token: ''
+        autoConnect: true

@@ -801,6 +801,50 @@ export interface Config {
 
 Source: [`packages/host/webserver/src/index.ts:45`](../packages/host/webserver/src/index.ts)
 
+<a id="deepseek-aidsh-hub-client"></a>
+
+## `@deepseek-ai/dsh-hub-client`
+
+Requires: `sessions`
+
+```ts config-catalog
+/** Configuration for a remote hub connection. */
+export interface HubClientConfig {
+  /** WebSocket URI of the remote hub server, e.g. ws://192.168.1.100:8765/hub */
+  uri: string
+  /** Optional authentication token. */
+  token?: string
+  /** Auto-connect on plugin load. */
+  autoConnect?: boolean
+}
+```
+
+Source: [`packages/hub/client/src/index.ts:21`](../packages/hub/client/src/index.ts)
+
+<a id="deepseek-aidsh-hub-server"></a>
+
+## `@deepseek-ai/dsh-hub-server`
+
+Requires: `sessions`
+
+```ts config-catalog
+/**
+ * Hub server configuration.
+ */
+export interface HubServerConfig {
+  /** TCP port to listen on. Defaults to 8765. */
+  port?: number
+  /** Host to bind to. Defaults to '0.0.0.0'. */
+  host?: string
+  /** Optional set of authentication tokens. */
+  authTokens?: string[]
+  /** Server identity name. */
+  serverName?: string
+}
+```
+
+Source: [`packages/hub/server/src/server.ts:32`](../packages/hub/server/src/server.ts)
+
 <a id="deepseek-aidsh-invariants"></a>
 
 ## `@deepseek-ai/dsh-invariants`
@@ -3039,6 +3083,7 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 - `@deepseek-ai/dsh-client-ui-directory-picker-browse` ([`packages/client/ui-directory-picker-browse/src/index.ts`](../packages/client/ui-directory-picker-browse/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-directory-picker-native` ([`packages/client/ui-directory-picker-native/src/index.ts`](../packages/client/ui-directory-picker-native/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-goal` ([`packages/client/ui-goal/src/index.ts`](../packages/client/ui-goal/src/index.ts))
+- `@deepseek-ai/dsh-client-ui-hub` ([`packages/client/ui-hub/src/index.ts`](../packages/client/ui-hub/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-input-trigger` ([`packages/client/ui-input-trigger/src/index.ts`](../packages/client/ui-input-trigger/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-jobs` ([`packages/client/ui-jobs/src/index.ts`](../packages/client/ui-jobs/src/index.ts))
 - `@deepseek-ai/dsh-client-ui-layout` ([`packages/client/ui-layout/src/index.ts`](../packages/client/ui-layout/src/index.ts))
@@ -3132,6 +3177,7 @@ Imported as libraries by other packages; a `cordis.yml` cannot load them.
 - `@deepseek-ai/dsh-cmdline` ([`packages/boot/cmdline/src/index.ts`](../packages/boot/cmdline/src/index.ts))
 - `@deepseek-ai/dsh-home-paths` ([`packages/util/home-paths/src/index.ts`](../packages/util/home-paths/src/index.ts))
 - `@deepseek-ai/dsh-hook-protocol` ([`packages/hooks/hook-protocol/src/index.ts`](../packages/hooks/hook-protocol/src/index.ts))
+- `@deepseek-ai/dsh-hub-protocol` ([`packages/hub/protocol/src/index.ts`](../packages/hub/protocol/src/index.ts))
 - `@deepseek-ai/dsh-launch-environment` ([`packages/util/launch-environment/src/index.ts`](../packages/util/launch-environment/src/index.ts))
 - `@deepseek-ai/dsh-llm-mock-server` ([`packages/test-support/llm-mock-server/src/index.ts`](../packages/test-support/llm-mock-server/src/index.ts))
 - `@deepseek-ai/dsh-loader-smoke` ([`packages/test-support/loader-smoke/src/index.ts`](../packages/test-support/loader-smoke/src/index.ts))

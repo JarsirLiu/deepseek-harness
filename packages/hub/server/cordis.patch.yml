@@ -1,0 +1,17 @@
+# @deepseek-ai/dsh-hub-server bundle patch: mounts the hub server plugin on a
+# DeepSeek Harness instance, exposing local sessions over WebSocket JSON-RPC.
+# Applied as a bundle layer when the package is installed via `dsh plugin add`.
+#
+# Default config is permissive (autoConnect for client, 0.0.0.0 for server)
+# so the row is disabled by default — the user enables it and supplies an
+# auth token before starting.
+
+- insert:
+    - id: hub-server
+      name: '@deepseek-ai/dsh-hub-server'
+      disabled: true
+      config:
+        port: 8765
+        host: '0.0.0.0'
+        authTokens: []
+        serverName: deepseek-harness-hub
