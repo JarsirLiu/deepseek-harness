@@ -42,7 +42,17 @@ interface RemoteWorkspace {
   id: string
   title: string
   path: string
-  sessionIds: string[]
+  sessions: Array<{
+    sessionId: string
+    updatedAt: number
+    running: boolean
+    blank: boolean
+    cwd?: string
+    title?: string
+    agentPreset?: string
+    parentSessionId?: string
+    origin?: 'subagent'
+  }>
 }
 
 interface RemoteWorkspaceSessionCreateResult {
@@ -784,7 +794,7 @@ export function WorkspaceBrowser({
       workspaceId: `${REMOTE_WORKSPACE_PREFIX}${workspace.id}` as WorkspaceId,
       path: workspace.path,
       title: workspace.title,
-      sessionIds: workspace.sessionIds as SessionId[],
+      sessionIds: workspace.sessions.map(session => session.sessionId as SessionId),
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date().toISOString(),
     }))
@@ -808,8 +818,8 @@ export function WorkspaceBrowser({
           const workspaces = (result?.workspaces ?? []).filter(workspace => selected.includes(workspace.id))
           setRemoteWorkspaces(workspaces)
           for (const workspace of workspaces) {
-            for (const sessionId of workspace.sessionIds) {
-              globalThis.dispatchEvent(new CustomEvent('dsh:remote-workspace-session-known', { detail: { sessionId } }))
+            for (const session of workspace.sessions) {
+              globalThis.dispatchEvent(new CustomEvent('dsh:remote-workspace-session-known', { detail: session }))
             }
           }
         })
@@ -850,9 +860,7 @@ export function WorkspaceBrowser({
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       return await response.json() as RemoteWorkspaceSessionCreateResult
     }).then((result) => {
-      setRemoteWorkspaces(current => current.map(workspace => workspace.id !== remoteId
-        ? workspace
-        : { ...workspace, sessionIds: [result.sessionId, ...workspace.sessionIds.filter(id => id !== result.sessionId)] }))
+      globalThis.dispatchEvent(new CustomEvent('dsh:remote-workspaces-changed'))
       globalThis.dispatchEvent(new CustomEvent('dsh:remote-workspace-session-created', { detail: {
         workspaceId: remoteId,
         sessionId: result.sessionId,

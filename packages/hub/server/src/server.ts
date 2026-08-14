@@ -177,7 +177,7 @@ export class HubServer {
       case 'hub/list':
         return this.handleList()
       case 'hub/workspaces':
-        return this.handleWorkspaces()
+        return await this.handleWorkspaces()
       case 'hub/workspace-session/create':
         return await this.handleWorkspaceSessionCreate(params as { workspaceId: string })
       case 'hub/create':
@@ -242,16 +242,77 @@ export class HubServer {
   }
 
   /** List directories registered by the remote device's workspace service. */
-  private handleWorkspaces(): { workspaces: import('@deepseek-ai/dsh-hub-protocol').HubWorkspaceEntry[] } {
+  private async handleWorkspaces(): Promise<{ workspaces: import('@deepseek-ai/dsh-hub-protocol').HubWorkspaceEntry[] }> {
     const registry = this.ctx.get('workspaceRegistry') as {
       list: () => Array<{ id: string; title: string; path: string; sessionIds: SessionId[] }>
     } | undefined
+    const api = this.ctx.get('apiProxy') as {
+      sessions: {
+        list: (request: {
+          rpcId: string
+          payload: Record<string, never>
+        }) => Promise<{
+          result: { ok: true
+            value: { items: Array<{
+              sessionId: SessionId
+              updatedAt: number
+              running: boolean
+              blank: boolean
+              cwd?: string
+              agentPreset?: string
+              parentSessionId?: SessionId
+              origin?: 'subagent'
+              projections?: { values?: { title?: string | null } }
+            }> } } | { ok: false; error: unknown }
+        }>
+        history: (request: { rpcId: string; payload: { sessionId: SessionId; maxMessages: number } }) => Promise<{
+          result: { ok: true; value: { projections?: { values?: { title?: string | null } } } } | { ok: false; error: unknown }
+        }>
+      }
+    } | undefined
+    const summaries = api === undefined
+      ? []
+      : await api.sessions.list({ rpcId: `hub-workspaces-${Date.now()}`, payload: {} }).then((response) => {
+        if (!response.result.ok) throw new Error(`remote session listing failed: ${JSON.stringify(response.result.error)}`)
+        return response.result.value.items
+      })
+    const byId = new Map(await Promise.all(summaries.map(async (summary) => {
+      if (typeof summary.projections?.values?.title === 'string' && summary.projections.values.title !== '') {
+        return [String(summary.sessionId), summary] as const
+      }
+      const history = api === undefined
+        ? undefined
+        : await api.sessions.history({
+          rpcId: `hub-workspace-history-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          payload: { sessionId: summary.sessionId, maxMessages: 1 },
+        })
+      if (history?.result.ok !== true) return [String(summary.sessionId), summary] as const
+      const title = history.result.value.projections?.values?.title
+      return [String(summary.sessionId), typeof title === 'string' && title !== ''
+        ? { ...summary, projections: { ...summary.projections, values: { ...summary.projections?.values, title } } }
+        : summary] as const
+    })))
     return {
       workspaces: registry?.list().map(workspace => ({
         id: workspace.id,
         title: workspace.title,
         path: workspace.path,
-        sessionIds: [...workspace.sessionIds],
+        sessions: workspace.sessionIds.flatMap((sessionId) => {
+          const summary = byId.get(String(sessionId))
+          if (summary === undefined) return []
+          const title = summary.projections?.values?.title
+          return [{
+            sessionId: summary.sessionId,
+            updatedAt: summary.updatedAt,
+            running: summary.running,
+            blank: summary.blank,
+            ...(summary.cwd === undefined ? {} : { cwd: summary.cwd }),
+            ...(typeof title === 'string' && title !== '' ? { title } : {}),
+            ...(summary.agentPreset === undefined ? {} : { agentPreset: summary.agentPreset }),
+            ...(summary.parentSessionId === undefined ? {} : { parentSessionId: summary.parentSessionId }),
+            ...(summary.origin === undefined ? {} : { origin: summary.origin }),
+          }]
+        }),
       })) ?? [],
     }
   }

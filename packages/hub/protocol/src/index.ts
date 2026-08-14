@@ -29,6 +29,7 @@ export type {
   HubListParams,
   HubListResult,
   HubWorkspaceEntry,
+  HubWorkspaceSession,
   HubWorkspaceListResult,
   HubLoadParams,
   HubLoadResult,

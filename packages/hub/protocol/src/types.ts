@@ -56,8 +56,21 @@ export interface HubWorkspaceEntry {
   title: string
   /** Canonical path on the remote device; never used as a local path. */
   path: string
-  /** Sessions currently attached to this workspace. */
-  sessionIds: SessionId[]
+  /** Sessions currently attached to this workspace, projected by the owner. */
+  sessions: HubWorkspaceSession[]
+}
+
+/** Remote session summary projected by the owning Hub device. */
+export interface HubWorkspaceSession {
+  sessionId: SessionId
+  updatedAt: number
+  running: boolean
+  blank: boolean
+  cwd?: string
+  title?: string
+  agentPreset?: string
+  parentSessionId?: SessionId
+  origin?: 'subagent'
 }
 
 /** Result of listing workspaces on the remote Hub. */

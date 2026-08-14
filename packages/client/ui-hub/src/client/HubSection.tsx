@@ -22,6 +22,8 @@ export interface HubSectionInjected {
   loadStatus: () => Promise<HubStatusResult>
   /** Load directories registered by the remote device. */
   loadWorkspaces: () => Promise<HubWorkspaceListResult>
+  /** Reconnect the host Hub client and wait for the connection attempt. */
+  reconnect: () => Promise<void>
 }
 
 /** View state for the section. */
@@ -54,10 +56,11 @@ const STATUS_DOT_CLASS: Record<HubStatusResponse['status'], string> = {
  * @param props - section owner props and localized copy.
  * @returns the section element tree.
  */
-export function HubSection({ t, loadStatus, loadWorkspaces }: HubSectionProps): ReactNode {
+export function HubSection({ t, loadStatus, loadWorkspaces, reconnect }: HubSectionProps): ReactNode {
   const [state, setState] = useState<ViewState>({ kind: 'loading' })
   const [workspaces, setWorkspaces] = useState<HubWorkspaceEntry[]>([])
   const [selectedIds, setSelectedIds] = useState<string[]>(() => readSelectedWorkspaceIds())
+  const [workspacesVersion, setWorkspacesVersion] = useState(0)
 
   const toggleWorkspace = (workspaceId: string): void => {
     const next = selectedIds.includes(workspaceId)
@@ -70,13 +73,16 @@ export function HubSection({ t, loadStatus, loadWorkspaces }: HubSectionProps): 
 
   const fetchStatus = useCallback((): void => {
     setState({ kind: 'loading' })
-    loadStatus()
+    setWorkspacesVersion(version => version + 1)
+    reconnect()
+      .catch(() => undefined)
+      .then(() => loadStatus())
       .then((result) => { setState(result) })
       .catch((error: unknown) => {
         if (!(error instanceof Error)) throw error
         setState({ kind: 'error', message: error.message })
       })
-  }, [loadStatus])
+  }, [loadStatus, reconnect])
 
   useEffect(() => {
     fetchStatus()
@@ -84,8 +90,11 @@ export function HubSection({ t, loadStatus, loadWorkspaces }: HubSectionProps): 
 
   useEffect(() => {
     if (state.kind !== 'ready' || state.status.status !== 'connected') return
-    loadWorkspaces().then((result) => { setWorkspaces(result.workspaces) }).catch(() => { setWorkspaces([]) })
-  }, [loadWorkspaces, state])
+    loadWorkspaces().then((result) => {
+      setWorkspaces(result.workspaces)
+      globalThis.dispatchEvent(new CustomEvent('dsh:remote-workspaces-changed'))
+    }).catch(() => { setWorkspaces([]) })
+  }, [loadWorkspaces, state, workspacesVersion])
 
   const statusDotClass = (): string => {
     if (state.kind !== 'ready') return css.dot as string
@@ -144,6 +153,7 @@ export function HubSection({ t, loadStatus, loadWorkspaces }: HubSectionProps): 
           <span className={css.value} data-status={status.status}>
             {t(STATUS_LABEL[status.status])}
           </span>
+          <Button variant="outline" size="sm" onClick={fetchStatus}>{t('retry')}</Button>
         </div>
 
         {/* Server URI */}

@@ -21,7 +21,7 @@ interface RemoteSessionRouter {
   cancel(sessionId: SessionId): Promise<RpcResult<{ accepted: true }>>
   subscribe(sessionId: SessionId, listener: (frame: MuxFrame) => void): () => void
 }
-import type { HubStatusResponse, HubWorkspaceListResult } from '@deepseek-ai/dsh-hub-protocol'
+import type { HubStatusResponse, HubWorkspaceListResult, HubWorkspaceSession } from '@deepseek-ai/dsh-hub-protocol'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { HubSection, type HubStatusResult } from './HubSection.tsx'
@@ -94,25 +94,15 @@ export function apply(ctx: ClientContext): void {
   ctx.provide(REMOTE_SESSION_ROUTER, router)
   ctx.effect(() => {
     const onKnown = (event: Event): void => {
-      const detail = (event as CustomEvent<{ sessionId: SessionId }>).detail
+      const detail = (event as CustomEvent<HubWorkspaceSession>).detail
       remoteSessionIds.add(String(detail.sessionId))
+      ;(ctx.sessions as unknown as {
+        adoptRemote: (summary: HubWorkspaceSession) => void
+      }).adoptRemote(detail)
     }
     const onCreated = (event: Event): void => {
       const detail = (event as CustomEvent<{ sessionId: SessionId }>).detail
       remoteSessionIds.add(String(detail.sessionId))
-      ;(ctx.sessions as unknown as {
-        adoptRemote: (summary: {
-          sessionId: SessionId
-          updatedAt: number
-          running: boolean
-          blank: boolean
-        }) => void
-      }).adoptRemote({
-        sessionId: detail.sessionId,
-        updatedAt: Date.now(),
-        running: false,
-        blank: true,
-      })
     }
     globalThis.addEventListener('dsh:remote-workspace-session-known', onKnown)
     globalThis.addEventListener('dsh:remote-workspace-session-created', onCreated)
@@ -130,12 +120,21 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
     inject: () => ({
       loadStatus: loadHubStatus,
+      reconnect: async () => {
+        const response = await globalThis.fetch('/api/hub/reconnect', { credentials: 'same-origin' })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      },
       loadWorkspaces: async () => {
         const response = await globalThis.fetch('/api/hub/workspaces', { credentials: 'same-origin' })
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
         const result = await response.json() as HubWorkspaceListResult
         for (const workspace of result.workspaces) {
-          for (const sessionId of workspace.sessionIds) remoteSessionIds.add(String(sessionId))
+          for (const session of workspace.sessions) {
+            remoteSessionIds.add(String(session.sessionId))
+            ;(ctx.sessions as unknown as {
+              adoptRemote: (summary: HubWorkspaceSession) => void
+            }).adoptRemote(session)
+          }
         }
         return result
       },

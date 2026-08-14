@@ -73,6 +73,23 @@ export function apply(ctx: Context, config: HubClientConfig): void {
       },
     })
     ctx.effect(() => dispose, 'hub-client.webServer')
+    const reconnectDispose = webServer.register({
+      kind: 'exact',
+      path: '/api/hub/reconnect',
+      handler: async (_req: unknown, res: unknown) => {
+        const response = res as { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void }
+        try {
+          provider.disconnect()
+          await provider.connect()
+          response.writeHead(200, { 'Content-Type': 'application/json' })
+          response.end(JSON.stringify({ ok: true }))
+        } catch (error) {
+          response.writeHead(502, { 'Content-Type': 'application/json' })
+          response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
+        }
+      },
+    })
+    ctx.effect(() => reconnectDispose, 'hub-client.webServer.reconnect')
     const configDispose = webServer.register({
       kind: 'exact',
       path: '/api/hub/client-config',
