@@ -6,7 +6,7 @@
 
 ## 配置
 
-插件 profile row 接受 `port`、`host`、`authTokens` 和 `serverName`。它持有监听服务器，并随插件 fiber 一起释放。schema 中认证 token 可选，但网络暴露与 TLS 仍由部署负责。
+插件 profile row 接受 `port`、`host`、`authTokens` 和 `serverName`。它持有监听服务器，并随插件 fiber 一起释放。默认只监听回环地址；只有配置认证并保护传输时才应指定非回环地址。
 
 ## 安装
 

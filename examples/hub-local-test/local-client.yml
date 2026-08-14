@@ -1,0 +1,8 @@
+# Local two-process test: run this on the simulated local device.
+
+- id: hub-client
+  disabled: false
+  config:
+    uri: 'ws://127.0.0.1:8765/hub'
+    token: 'dsh-local-test-token'
+    autoConnect: true

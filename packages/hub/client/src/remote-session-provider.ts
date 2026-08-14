@@ -1,18 +1,15 @@
 /**
- * Remote session provider: implements the SessionPersistence seam by
- * forwarding all operations to a remote hub server over WebSocket JSON-RPC.
+ * Remote session provider: forwards remote session operations over WebSocket
+ * JSON-RPC without registering a local session persistence service.
  *
  * @module @deepseek-ai/dsh-hub-client/remote-session-provider
  */
 
 import WebSocket from 'ws'
 import { Context } from '@deepseek-ai/cordis'
+import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, SessionId, SessionHeader } from '@deepseek-ai/dsh-session'
-import {
-  SessionPersistence,
-  type SessionInspection,
-  type SessionPersistenceSnapshot,
-} from '@deepseek-ai/dsh-session-persistence'
+import type { SessionInspection, SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persistence'
 import {
   JsonRpcWebSocketTransport,
   type JsonRpcTransportPeer,
@@ -32,6 +29,39 @@ export class HubConnectionError extends Error {
   }
 }
 
+/** Remote Agent command surface used by a local Web/API adapter. */
+export class RemoteAgentClient {
+  constructor(private readonly provider: RemoteSessionProvider) {}
+
+  /** Queue one text prompt on the remote Agent. */
+  async sendText(sessionId: SessionId, text: string): Promise<void> {
+    await this.send(sessionId, createUserMessage({
+      content: [{ type: 'text', text }],
+      source: { kind: 'user' },
+    }))
+  }
+
+  /** Queue one already normalized user message on the remote Agent. */
+  async send(sessionId: SessionId, message: UserMessage): Promise<void> {
+    await this.sendMessage(sessionId, message, 'queue')
+  }
+
+  /** Queue or steer one user message on the remote Agent. */
+  async sendMessage(sessionId: SessionId, message: UserMessage, mode: 'queue' | 'steer'): Promise<void> {
+    await this.provider.request('hub/agent/message', { id: sessionId, message, mode })
+  }
+
+  /** Cancel the remote Agent's active turn. */
+  async cancel(sessionId: SessionId): Promise<void> {
+    await this.provider.request('hub/agent/cancel', { id: sessionId, cause: 'user' })
+  }
+
+  /** Forward remote session events to a host API event carrier. */
+  onEvent(listener: (notification: HubEventNotification) => void): () => void {
+    return this.provider.onEvent(listener)
+  }
+}
+
 /** Configuration for a remote hub connection. */
 export interface RemoteHubConfig {
   /** WebSocket URI of the remote hub server, e.g. ws://192.168.1.100:8765/hub */
@@ -47,10 +77,11 @@ const DEFAULTS = {
 }
 
 /**
- * A session persistence backend that delegates all operations to a remote
- * harness hub server over WebSocket JSON-RPC.
+ * A remote session transport that delegates session operations to a remote
+ * harness hub server over WebSocket JSON-RPC. Local persistence remains the
+ * process-wide `sessionPersistence` service.
  */
-export class RemoteSessionProvider extends SessionPersistence {
+export class RemoteSessionProvider {
   private ws: WebSocket | null = null
   private transport: JsonRpcTransportPeer | null = null
   private state: ConnectionState = 'disconnected'
@@ -64,8 +95,13 @@ export class RemoteSessionProvider extends SessionPersistence {
     (notification: HubStatusNotification) => void
   >()
 
+  /** Request access for the provider-owned command client. */
+  request(method: string, params: object): Promise<unknown> {
+    return this.ensureConnected().request(method, params)
+  }
+
   constructor(ctx: Context, config: RemoteHubConfig) {
-    super(ctx)
+    void ctx
     this.config = {
       uri: config.uri,
       token: config.token ?? '',
@@ -109,6 +145,7 @@ export class RemoteSessionProvider extends SessionPersistence {
       }) as HubHandshakeResult
 
       this.state = 'connected'
+      await transport.request('hub/subscribe', {})
 
       // Set up notification handlers.
       ws.on('message', (data) => {
@@ -199,9 +236,27 @@ export class RemoteSessionProvider extends SessionPersistence {
     }
     const listeners = this.eventListeners.get(String(sessionId))
     if (listeners === undefined) throw new Error('event listener set was not registered')
+    const wasEmpty = listeners.size === 0
+    listeners.add(listener)
+    if (wasEmpty) {
+      void this.request('hub/subscribe', { id: sessionId })
+    }
+    return () => {
+      const current = this.eventListeners.get(String(sessionId))
+      if (current?.delete(listener) && current.size === 0) {
+        void this.request('hub/unsubscribe', { id: sessionId })
+      }
+    }
+  }
+
+  /** Subscribe to every remote session event for a host API event bridge. */
+  onEvent(listener: (notification: HubEventNotification) => void): () => void {
+    const listeners = this.eventListeners.get('*') ?? new Set()
+    this.eventListeners.set('*', listeners)
     listeners.add(listener)
     return () => {
-      this.eventListeners.get(String(sessionId))?.delete(listener)
+      listeners.delete(listener)
+      if (listeners.size === 0) this.eventListeners.delete('*')
     }
   }
 
@@ -215,24 +270,24 @@ export class RemoteSessionProvider extends SessionPersistence {
 
   // ── SessionPersistence implementation ─────────────────────────────
 
-  override locate(_meta: SessionHeader): { kind: string; path: string } | undefined {
+  locate(_meta: SessionHeader): { kind: string; path: string } | undefined {
     // Remote sessions have no local artifact path.
     return undefined
   }
 
-  override readonly supportsRawArtifacts = false
+  readonly supportsRawArtifacts = false
 
-  override async create(meta: SessionHeader): Promise<void> {
+  async create(meta: SessionHeader): Promise<void> {
     const transport = this.ensureConnected()
     await transport.request('hub/create', { meta })
   }
 
-  override async append(id: SessionId, events: readonly SessionEvent[]): Promise<void> {
+  async append(id: SessionId, events: readonly SessionEvent[]): Promise<void> {
     const transport = this.ensureConnected()
     await transport.request('hub/append', { id, events: [...events] })
   }
 
-  override async load(id: SessionId): Promise<SessionInspection> {
+  async load(id: SessionId): Promise<SessionInspection> {
     const transport = this.ensureConnected()
     const result = await transport.request('hub/load', { id }) as {
       meta: SessionHeader
@@ -241,7 +296,7 @@ export class RemoteSessionProvider extends SessionPersistence {
     return { meta: result.meta, events: result.events }
   }
 
-  override async inspect(id: SessionId, _signal?: AbortSignal): Promise<SessionInspection> {
+  async inspect(id: SessionId, _signal?: AbortSignal): Promise<SessionInspection> {
     const transport = this.ensureConnected()
     const result = await transport.request('hub/inspect', { id }) as {
       meta: SessionHeader
@@ -250,7 +305,7 @@ export class RemoteSessionProvider extends SessionPersistence {
     return { meta: result.meta, events: result.events }
   }
 
-  override async readFrom(
+  async readFrom(
     id: SessionId,
     fromSeq: number,
     _signal?: AbortSignal,
@@ -263,7 +318,7 @@ export class RemoteSessionProvider extends SessionPersistence {
     }
   }
 
-  override async list(_signal?: AbortSignal): Promise<SessionHeader[]> {
+  async list(_signal?: AbortSignal): Promise<SessionHeader[]> {
     const transport = this.ensureConnected()
     const result = await transport.request('hub/list', {}) as {
       sessions: { header: SessionHeader }[]
@@ -271,7 +326,7 @@ export class RemoteSessionProvider extends SessionPersistence {
     return result.sessions.map(s => s.header)
   }
 
-  override async listSnapshots(_signal?: AbortSignal): Promise<SessionPersistenceSnapshot[]> {
+  async listSnapshots(_signal?: AbortSignal): Promise<SessionPersistenceSnapshot[]> {
     const transport = this.ensureConnected()
     const result = await transport.request('hub/list', {}) as {
       sessions: { header: SessionHeader }[]

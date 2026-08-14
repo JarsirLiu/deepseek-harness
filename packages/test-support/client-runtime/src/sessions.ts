@@ -413,6 +413,11 @@ export class TestSessions implements ISessions {
     })
   }
 
+  /** Add a remote session summary for tests that exercise remote navigation. */
+  adoptRemote(summary: import('@deepseek-ai/dsh-api-remotes/client').SessionSummary): void {
+    this.calls.push({ method: 'open', args: [summary.sessionId] })
+  }
+
   /** Open an existing fixture through its catalog address. */
   openSubagent(address: SubagentAddress): void {
     this.calls.push({ method: 'openSubagent', args: [address] })

@@ -45,6 +45,8 @@ export interface GroupNode {
   /** Workspace creation time (epoch ms); absent only for the ungrouped bucket. */
   createdAt: number | undefined
   label: string
+  /** Whether this group is projected from a remote Hub workspace. */
+  isRemote?: boolean
   /** Total visible sessions in the group. */
   sessionCount: number
   expanded: boolean
@@ -263,6 +265,7 @@ export function deriveGroups(
       cwd: g.cwd,
       createdAt: g.createdAt,
       label: g.label,
+      isRemote: typeof g.workspaceId === 'string' && g.workspaceId.startsWith('remote:'),
       sessionCount: g.sessions.length,
       expanded,
       containsCurrent: g.key === currentGroup,

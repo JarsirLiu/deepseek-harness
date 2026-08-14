@@ -7,6 +7,7 @@
  */
 
 import type { SessionEvent, SessionId, SessionHeader } from '@deepseek-ai/dsh-session'
+import type { UserMessage } from '@deepseek-ai/dsh-llm'
 
 // ── Session operations ─────────────────────────────────────────────
 
@@ -47,6 +48,33 @@ export interface HubLoadResult {
   events: SessionEvent[]
 }
 
+/** One directory registered on the remote Hub. */
+export interface HubWorkspaceEntry {
+  /** Stable workspace identifier owned by the remote device. */
+  id: string
+  /** Display name for the remote workspace. */
+  title: string
+  /** Canonical path on the remote device; never used as a local path. */
+  path: string
+  /** Sessions currently attached to this workspace. */
+  sessionIds: SessionId[]
+}
+
+/** Result of listing workspaces on the remote Hub. */
+export interface HubWorkspaceListResult {
+  workspaces: HubWorkspaceEntry[]
+}
+
+/** Parameters for creating a session in a remote workspace. */
+export interface HubWorkspaceSessionCreateParams {
+  workspaceId: string
+}
+
+/** Result of creating a session in a remote workspace. */
+export interface HubWorkspaceSessionCreateResult {
+  sessionId: SessionId
+}
+
 /** Parameters for appending events to a session. */
 export interface HubAppendParams {
   id: SessionId
@@ -74,6 +102,27 @@ export interface HubDeleteParams {
 
 /** Result of deleting a session (empty on success). */
 export type HubDeleteResult = Record<string, never>
+
+/** Parameters for queueing one user message on a remote Agent. */
+export interface HubAgentMessageParams {
+  id: SessionId
+  message: UserMessage
+  mode?: 'queue' | 'steer'
+}
+
+/** Result of accepting a remote Agent message. */
+export interface HubAgentMessageResult {
+  accepted: true
+}
+
+/** Parameters for cancelling the active turn of a remote Agent. */
+export interface HubAgentCancelParams {
+  id: SessionId
+  cause?: 'user' | 'shutdown' | 'remote'
+}
+
+/** Result of cancelling a remote Agent turn. */
+export type HubAgentCancelResult = Record<string, never>
 
 /** Parameters for subscribing to session events. */
 export interface HubSubscribeParams {
@@ -152,11 +201,15 @@ export interface HubNotificationMap {
 export interface HubRequestMap {
   'hub/handshake': { params: HubHandshakeParams; result: HubHandshakeResult }
   'hub/list': { params: HubListParams; result: HubListResult }
+  'hub/workspaces': { params: Record<string, never>; result: HubWorkspaceListResult }
+  'hub/workspace-session/create': { params: HubWorkspaceSessionCreateParams; result: HubWorkspaceSessionCreateResult }
   'hub/create': { params: HubCreateParams; result: HubCreateResult }
   'hub/load': { params: HubLoadParams; result: HubLoadResult }
   'hub/append': { params: HubAppendParams; result: HubAppendResult }
   'hub/inspect': { params: HubInspectParams; result: HubInspectResult }
   'hub/delete': { params: HubDeleteParams; result: HubDeleteResult }
+  'hub/agent/message': { params: HubAgentMessageParams; result: HubAgentMessageResult }
+  'hub/agent/cancel': { params: HubAgentCancelParams; result: HubAgentCancelResult }
   'hub/subscribe': { params: HubSubscribeParams; result: HubAppendResult }
   'hub/unsubscribe': { params: HubSubscribeParams; result: HubAppendResult }
 }

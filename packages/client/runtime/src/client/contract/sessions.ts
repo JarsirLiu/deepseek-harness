@@ -34,6 +34,8 @@ export interface ISessions {
    * (fixture included) reports the same number.
    */
   readonly searchResultLimit: number
+  /** Add a Hub-owned session to the ordinary session list. */
+  adoptRemote(summary: import('@deepseek-ai/dsh-api-remotes/client').SessionSummary): void
   /**
    * Select a session as current.
    * @param id - session id (must exist in the list; unknown ids fail loud).

@@ -22,7 +22,7 @@ import type { PendingInteraction } from './pending.ts'
 import { PendingWait } from './pending.ts'
 import { Notifier } from './notifier.ts'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
-import type { SessionRemotes } from './remotes.ts'
+import { REMOTE_SESSION_ROUTER, type RemoteSessionRouter, type SessionRemotes } from './remotes.ts'
 import { ProjectionValueStore } from './projection-store.ts'
 import type { ProjectionsBaseline } from './projection-store.ts'
 import { resolvedClientTimeZone } from '../time-zone.ts'
@@ -107,6 +107,7 @@ export class Session implements SessionFace {
   private stitching = false
   /** subscribed.lastSeq baseline (gap detection; null when no subscribed frame arrived — degrade to the liveBuffer dedup path). */
   private subscribedLastSeq: number | null = null
+  private remoteSubscription: (() => void) | null = null
 
   /**
    * Per-session projection value store (push model; see the session-projection
@@ -198,7 +199,10 @@ export class Session implements SessionFace {
     this.notifier.markDirty()
     let result: RpcResult<{ accepted: true }>
     try {
-      if (this.address === undefined) {
+      const router = this.remoteRouter()
+      if (router !== undefined && router.owns(this.sessionId)) {
+        result = await router.prompt(this.sessionId, content, mode)
+      } else if (this.address === undefined) {
         result = (await this.api.sessions.prompt({
           sessionId: this.sessionId,
           mode,
@@ -316,9 +320,12 @@ export class Session implements SessionFace {
     }
     let result: RpcResult<{ accepted: true }>
     try {
-      result = address !== undefined
-        ? (await this.api.subagents.interrupt(address)).result
-        : (await this.api.sessions.cancel({ sessionId: this.sessionId })).result
+      const router = this.remoteRouter()
+      result = router !== undefined && router.owns(this.sessionId)
+        ? await router.cancel(this.sessionId)
+        : address !== undefined
+          ? (await this.api.subagents.interrupt(address)).result
+          : (await this.api.sessions.cancel({ sessionId: this.sessionId })).result
     } catch (error) {
       result = transportError(error)
     }
@@ -616,6 +623,12 @@ export class Session implements SessionFace {
     this.openError = null
     this.notifier.markDirty()
     try {
+      const router = this.remoteRouter()
+      if (router !== undefined && router.owns(this.sessionId) && this.remoteSubscription === null) {
+        this.remoteSubscription = router.subscribe(this.sessionId, (frame) => {
+          this.handleMuxEnvelope('remote' as RpcId, frame)
+        })
+      }
       let { result } = await this.history({ maxMessages: PAGE_MESSAGES })
       if (generation !== this.openGeneration) return
       if (!result.ok) {
@@ -773,9 +786,18 @@ export class Session implements SessionFace {
     hasMore: boolean
     projections?: ProjectionsBaseline
   }>> {
+    const router = this.remoteRouter()
+    if (router !== undefined && router.owns(this.sessionId)) {
+      return router.history(this.sessionId, payload).then(result => ({ rpcId: 'remote' as RpcId, result }))
+    }
     return this.address === undefined
       ? this.api.sessions.history({ sessionId: this.sessionId, ...payload })
       : this.api.subagents.history({ ...this.address, ...payload })
+  }
+
+  /** Resolve the optional router contributed by the remote-session plugin. */
+  private remoteRouter(): RemoteSessionRouter | undefined {
+    return this.actx?.get(REMOTE_SESSION_ROUTER) as RemoteSessionRouter | undefined
   }
 }
 

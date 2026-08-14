@@ -149,7 +149,10 @@ export function ProjectRowItem({ group, onToggle, onCreate, actions, drag, t }: 
         <IconTriangleRightFill14 className={clsx(css.arrow, row.expanded && css.arrowOpen)} />
       </span>
       <span className={css.projectText}>
-        <span className={css.title}>{label}</span>
+        <span className={css.title}>
+          {label}
+          {row.isRemote && <span className={css.remoteBadge}>远程</span>}
+        </span>
       </span>
       <span className={css.rowActions}>
         {actions !== undefined && (

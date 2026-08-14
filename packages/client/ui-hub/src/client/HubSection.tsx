@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { HubStatusResponse } from '@deepseek-ai/dsh-hub-protocol'
+import type { HubStatusResponse, HubWorkspaceEntry, HubWorkspaceListResult } from '@deepseek-ai/dsh-hub-protocol'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { HubLocaleKey } from './locales.ts'
 import css from './HubSection.module.css'
@@ -20,6 +20,8 @@ export type HubStatusResult =
 export interface HubSectionInjected {
   /** Load the current Hub status from the host. */
   loadStatus: () => Promise<HubStatusResult>
+  /** Load directories registered by the remote device. */
+  loadWorkspaces: () => Promise<HubWorkspaceListResult>
 }
 
 /** View state for the section. */
@@ -52,8 +54,19 @@ const STATUS_DOT_CLASS: Record<HubStatusResponse['status'], string> = {
  * @param props - section owner props and localized copy.
  * @returns the section element tree.
  */
-export function HubSection({ t, loadStatus }: HubSectionProps): ReactNode {
+export function HubSection({ t, loadStatus, loadWorkspaces }: HubSectionProps): ReactNode {
   const [state, setState] = useState<ViewState>({ kind: 'loading' })
+  const [workspaces, setWorkspaces] = useState<HubWorkspaceEntry[]>([])
+  const [selectedIds, setSelectedIds] = useState<string[]>(() => readSelectedWorkspaceIds())
+
+  const toggleWorkspace = (workspaceId: string): void => {
+    const next = selectedIds.includes(workspaceId)
+      ? selectedIds.filter(id => id !== workspaceId)
+      : [...selectedIds, workspaceId]
+    setSelectedIds(next)
+    globalThis.localStorage.setItem(SELECTED_WORKSPACES_KEY, JSON.stringify(next))
+    globalThis.dispatchEvent(new CustomEvent('dsh:remote-workspaces-changed'))
+  }
 
   const fetchStatus = useCallback((): void => {
     setState({ kind: 'loading' })
@@ -68,6 +81,11 @@ export function HubSection({ t, loadStatus }: HubSectionProps): ReactNode {
   useEffect(() => {
     fetchStatus()
   }, [fetchStatus])
+
+  useEffect(() => {
+    if (state.kind !== 'ready' || state.status.status !== 'connected') return
+    loadWorkspaces().then((result) => { setWorkspaces(result.workspaces) }).catch(() => { setWorkspaces([]) })
+  }, [loadWorkspaces, state])
 
   const statusDotClass = (): string => {
     if (state.kind !== 'ready') return css.dot as string
@@ -147,7 +165,36 @@ export function HubSection({ t, loadStatus }: HubSectionProps): ReactNode {
             </div>
           </>
         )}
+        <div className={css.workspaceList}>
+          <span className={css.label}>{t('workspaces')}</span>
+          {workspaces.length === 0
+            ? <span className={css.emptyText}>{t('noWorkspaces')}</span>
+            : workspaces.map(workspace => (
+              <label className={css.workspaceItem} key={workspace.id}>
+                <input
+                  type="checkbox"
+                  checked={selectedIds.includes(workspace.id)}
+                  onChange={() => { toggleWorkspace(workspace.id) }}
+                />
+                <span>
+                  <strong>{workspace.title}</strong>
+                  <code className={css.mono}>{workspace.path}</code>
+                </span>
+              </label>
+            ))}
+        </div>
       </div>
     </div>
   )
+}
+
+const SELECTED_WORKSPACES_KEY = 'dsh.remote.selected-workspaces'
+
+function readSelectedWorkspaceIds(): string[] {
+  try {
+    const value: unknown = JSON.parse(globalThis.localStorage.getItem(SELECTED_WORKSPACES_KEY) ?? '[]')
+    return Array.isArray(value) && value.every(item => typeof item === 'string') ? value : []
+  } catch {
+    return []
+  }
 }

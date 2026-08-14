@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-远程 Hub 连接的浏览器设置区。它通过客户端 slot 系统注册一个 `settings.section` 条目，并通过注入的回调读取 Host 侧 `hub-client` 状态端点。本包只负责展示和请求结果映射；WebSocket 连接与会话持久化由 [`dsh-hub-client`](../../hub/client/README.md) 持有。
+远程 Hub 连接的浏览器设置区。它通过客户端 slot 系统注册连接状态和“远程对话”条目。远程对话会连接配置的 Hub，列出或创建会话，接收实时事件，发送消息并取消正在运行的回合。全部能力由插件提供，不修改 Harness 核心或本地 composer。
 
 ## 组合方式
 
@@ -34,3 +34,13 @@
 
 - **状态为只读**：Hub URI 与凭据的修改属于 profile 配置，不在此设置区编辑。
 - **设置区依赖 Host 端点**：只安装 UI 包而没有 `dsh-hub-client` 时，界面会显示明确的未配置状态。
+
+与 `@deepseek-ai/dsh-hub-client` 和 `@deepseek-ai/dsh-hub-server` 一起配置：
+
+```yaml
+- name: '@deepseek-ai/dsh-hub-client'
+  config:
+    uri: 'ws://127.0.0.1:8765/hub'
+    token: 'local-test-token'
+- name: '@deepseek-ai/dsh-client-ui-hub'
+```

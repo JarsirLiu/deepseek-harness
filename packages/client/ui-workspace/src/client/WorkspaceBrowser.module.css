@@ -293,6 +293,79 @@
   overflow: visible;
 }
 
+.remoteWorkspaceSection {
+    flex: none;
+    padding: 0;
+  }
+
+.remoteWorkspaceHeading {
+    display: none;
+}
+
+.remoteWorkspaceRow {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.remoteWorkspaceRow:hover,
+.remoteWorkspaceRow[data-selected='true'] {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.remoteWorkspaceTitle,
+.remoteWorkspacePath {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remoteWorkspaceStatus,
+.remoteWorkspaceError {
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.remoteWorkspaceStatus {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.remoteWorkspaceError {
+  color: var(--dsw-alias-label-danger);
+}
+
+.remoteWorkspaceTitle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    line-height: 18px;
+  }
+
+.remoteWorkspaceBadge {
+    flex: none;
+    padding: 1px 4px;
+    border: 1px solid var(--dsw-alias-state-business-primary);
+    border-radius: 4px;
+    color: var(--dsw-alias-state-business-primary);
+    font-size: 10px;
+    line-height: 14px;
+  }
+
+.remoteWorkspacePath {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10px;
+  line-height: 14px;
+}
+
 .rail .listArea {
   margin-left: 0;
   margin-right: 0;

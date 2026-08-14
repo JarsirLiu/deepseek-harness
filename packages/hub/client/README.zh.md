@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-连接远程 Hub server 并通过 Harness session provider 提供其会话的 Cordis 插件。将它安装在运行浏览器或其他客户端应用的机器上；可选的 [`dsh-client-ui-hub`](../../client/ui-hub/README.md) 用于展示连接状态。
+连接远程 Hub server 并通过 Harness session provider 与 Agent command 提供其会话和远程执行能力的 Cordis 插件。将它安装在运行浏览器或其他客户端应用的机器上；可选的 [`dsh-client-ui-hub`](../../client/ui-hub/README.md) 用于展示连接状态。
 
 ## 配置
 
@@ -27,6 +27,10 @@
 #### KV Cache effect
 
 无额外影响；provider 请求组装与缓存行为由 session 组合负责。
+
+## 已知限制与后续工作
+
+- **Web 路由由部署负责** —— `RemoteAgentClient` 提供远程执行接口；Host API 必须为配置为远程执行的会话选择它。
 
 ## 已知限制与后续工作
 

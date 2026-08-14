@@ -38,6 +38,19 @@ const SEARCH_QUERY_MAX_CODE_UNITS = 500
 /** Session rows visible per Workspace before the local overflow control. */
 const COLLAPSED_SESSION_LIMIT = 5
 
+interface RemoteWorkspace {
+  id: string
+  title: string
+  path: string
+  sessionIds: string[]
+}
+
+interface RemoteWorkspaceSessionCreateResult {
+  sessionId: string
+}
+
+const REMOTE_WORKSPACE_PREFIX = 'remote:'
+
 /** Keep controlled input and RPC payload inside the session.search wire contract. */
 function sanitizeSearchQuery(value: string): string {
   const withoutNul = value.replaceAll('\0', '')
@@ -465,6 +478,7 @@ function SessionTree({
                 }}
                 drag={workspaceDragProps}
                 actions={group.workspaceId === undefined
+                  || group.workspaceId.startsWith(REMOTE_WORKSPACE_PREFIX)
                   ? undefined
                   : {
                     rename: () => {
@@ -761,12 +775,55 @@ export function WorkspaceBrowser({
   renderSlot,
   t,
 }: WorkspaceBrowserProps) {
+  const [remoteWorkspaces, setRemoteWorkspaces] = useState<readonly RemoteWorkspace[]>([])
   const workspaces = useWorkspaces(state => state.items)
   const workspacePhase = useWorkspaces(state => state.phase)
   const archivedSessionIds = useWorkspaces(state => state.archivedSessionIds)
+  const displayWorkspaces = useMemo<readonly WorkspaceView[]>(() => {
+    const remoteViews = remoteWorkspaces.map(workspace => ({
+      workspaceId: `${REMOTE_WORKSPACE_PREFIX}${workspace.id}` as WorkspaceId,
+      path: workspace.path,
+      title: workspace.title,
+      sessionIds: workspace.sessionIds as SessionId[],
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date().toISOString(),
+    }))
+    // Workspace titles are labels, not identities. A local project and a
+    // remote project may intentionally share the same title.
+    return [...workspaces, ...remoteViews]
+  }, [remoteWorkspaces, workspaces])
   // Live occupancy of this surface's directory-flow hole (the same source the
   // flow reads): a composition without a picking affordance can add nothing.
   const directoryFlowAvailable = useDirectoryFlow(occupied => occupied)
+  useEffect(() => {
+    let active = true
+    const load = (): void => {
+      void globalThis.fetch('/api/hub/workspaces', { credentials: 'same-origin' })
+        .then(response => response.ok
+          ? response.json() as Promise<{ workspaces?: RemoteWorkspace[] }>
+          : null)
+        .then((result) => {
+          if (!active) return
+          const selected = readSelectedRemoteWorkspaceIds()
+          const workspaces = (result?.workspaces ?? []).filter(workspace => selected.includes(workspace.id))
+          setRemoteWorkspaces(workspaces)
+          for (const workspace of workspaces) {
+            for (const sessionId of workspace.sessionIds) {
+              globalThis.dispatchEvent(new CustomEvent('dsh:remote-workspace-session-known', { detail: { sessionId } }))
+            }
+          }
+        })
+        .catch(() => {
+          if (active) setRemoteWorkspaces([])
+        })
+    }
+    load()
+    globalThis.addEventListener('dsh:remote-workspaces-changed', load)
+    return () => {
+      active = false
+      globalThis.removeEventListener('dsh:remote-workspaces-changed', load)
+    }
+  }, [])
   const groupBy = useStore(s => s.groupBy)
   const orderBy = useStore(s => s.orderBy)
   const groupExpansion = useStore(s => s.groupExpansion)
@@ -777,9 +834,32 @@ export function WorkspaceBrowser({
     actions.retainAccountKeys([
       UNGROUPED_KEY,
       FLAT_SESSION_ORDER_KEY,
-      ...workspaces.map(workspace => workspace.workspaceId as string),
+      ...displayWorkspaces.map(workspace => workspace.workspaceId as string),
     ])
-  }, [actions.retainAccountKeys, workspacePhase, workspaces])
+  }, [actions.retainAccountKeys, displayWorkspaces, workspacePhase])
+
+  const startDisplaySession = (workspaceId?: WorkspaceId): void => {
+    if (workspaceId === undefined || !workspaceId.startsWith(REMOTE_WORKSPACE_PREFIX)) {
+      startSession(workspaceId)
+      return
+    }
+    const remoteId = workspaceId.slice(REMOTE_WORKSPACE_PREFIX.length)
+    void globalThis.fetch(`/api/hub/workspace-session/create?workspaceId=${encodeURIComponent(remoteId)}`, {
+      credentials: 'same-origin',
+    }).then(async (response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      return await response.json() as RemoteWorkspaceSessionCreateResult
+    }).then((result) => {
+      setRemoteWorkspaces(current => current.map(workspace => workspace.id !== remoteId
+        ? workspace
+        : { ...workspace, sessionIds: [result.sessionId, ...workspace.sessionIds.filter(id => id !== result.sessionId)] }))
+      globalThis.dispatchEvent(new CustomEvent('dsh:remote-workspace-session-created', { detail: {
+        workspaceId: remoteId,
+        sessionId: result.sessionId,
+      } }))
+    }).catch(() => {
+    })
+  }
   // The query outlives the tree and the input (both wide-only) so collapsing
   // does not silently drop an in-progress filter.
   const [query, setQuery] = useState('')
@@ -1111,7 +1191,7 @@ export function WorkspaceBrowser({
             <SearchResults
               useSessions={useSessions}
               open={open}
-              workspaces={workspaces}
+              workspaces={displayWorkspaces}
               archivedSessionIds={archivedSessionIds}
               query={normalizedQuery}
               remote={remoteSearch}
@@ -1139,7 +1219,7 @@ export function WorkspaceBrowser({
                 onSessionRename={onSessionRename}
                 onSessionArchive={onSessionArchive}
                 forkSession={forkSession}
-                workspaces={workspaces}
+                workspaces={displayWorkspaces}
                 groupExpansion={groupExpansion}
                 setGroupExpanded={actions.setGroupExpanded}
                 sessionOrderByAccount={sessionOrderByAccount}
@@ -1147,7 +1227,7 @@ export function WorkspaceBrowser({
                 syncSessionOrderAccount={actions.syncSessionOrderAccount}
                 setSessionOrder={actions.setSessionOrder}
                 archivedSessionIds={archivedSessionIds}
-                startSession={startSession}
+                startSession={startDisplaySession}
                 open={open}
                 insertWorkspaceBefore={insertWorkspaceBefore}
                 insertSessionBefore={insertSessionBefore}
@@ -1259,4 +1339,13 @@ export function WorkspaceBrowser({
       </Modal>
     </div>
   )
+}
+
+function readSelectedRemoteWorkspaceIds(): string[] {
+  try {
+    const value: unknown = JSON.parse(globalThis.localStorage.getItem('dsh.remote.selected-workspaces') ?? '[]')
+    return Array.isArray(value) && value.every(item => typeof item === 'string') ? value : []
+  } catch {
+    return []
+  }
 }

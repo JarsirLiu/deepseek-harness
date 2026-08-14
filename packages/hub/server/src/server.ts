@@ -10,6 +10,7 @@ import { createServer } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import {
   JsonRpcWebSocketTransport,
   type HubHandshakeParams,
@@ -24,6 +25,8 @@ interface ClientRecord {
   id: string
   transport: JsonRpcWebSocketTransport
   subscribedSessions: Set<SessionId>
+  subscribedAll: boolean
+  authenticated: boolean
 }
 
 /**
@@ -38,11 +41,13 @@ export interface HubServerConfig {
   authTokens?: string[]
   /** Server identity name. */
   serverName?: string
+  /** Remote preset selected for each published workspace, keyed by workspace id. */
+  workspacePresets?: Record<string, string>
 }
 
 const DEFAULTS = {
   port: 8765,
-  host: '0.0.0.0',
+  host: '127.0.0.1',
   serverName: 'deepseek-harness-hub',
   version: '0.1.0',
 }
@@ -55,6 +60,8 @@ export class HubServer {
   private readonly httpServer = createServer()
   private readonly wss = new WebSocketServer({ noServer: true })
   private readonly clients = new Map<string, ClientRecord>()
+  private readonly resumedAgents = new Map<SessionId, { agent: import('@deepseek-ai/dsh-agent').Agent; dispose: () => Promise<void> }>()
+  private readonly eventDisposers: Array<() => void> = []
   private readonly config: Required<HubServerConfig>
   private started = false
 
@@ -67,6 +74,7 @@ export class HubServer {
       host: config.host ?? DEFAULTS.host,
       authTokens: config.authTokens ?? [],
       serverName: config.serverName ?? DEFAULTS.serverName,
+      workspacePresets: config.workspacePresets ?? {},
     }
 
     // Handle WebSocket upgrade requests.
@@ -92,32 +100,35 @@ export class HubServer {
     this.ctx.logger.info(`hub server listening on ${this.config.host}:${this.config.port}`)
 
     // Subscribe to session events for forwarding to subscribed clients.
-    this.ctx.on('session/event', (_session, event) => {
+    this.eventDisposers.push(this.ctx.on('session/event', (_session, event) => {
       const sessionId = _session.id
       const notification: HubEventNotification = { sessionId, event }
       this.broadcastToSubscribers(sessionId, 'hub/event', notification)
-    })
+    }))
 
     // Subscribe to session lifecycle events.
-    this.ctx.on('session/created', (session) => {
+    this.eventDisposers.push(this.ctx.on('session/created', (session) => {
       const notification: HubStatusNotification = {
         sessionId: session.id,
         status: 'created',
       }
       this.broadcastToSubscribers(session.id, 'hub/status', notification)
-    })
+    }))
 
-    this.ctx.on('session/disposed', (session) => {
+    this.eventDisposers.push(this.ctx.on('session/disposed', (session) => {
       const notification: HubStatusNotification = {
         sessionId: session.id,
         status: 'disposed',
       }
       this.broadcastToSubscribers(session.id, 'hub/status', notification)
-    })
+    }))
   }
 
   /** Stop the server and close all connections. */
   async stop(): Promise<void> {
+    for (const dispose of this.eventDisposers.splice(0)) dispose()
+    for (const entry of this.resumedAgents.values()) await entry.dispose()
+    this.resumedAgents.clear()
     for (const [id, client] of this.clients) {
       client.transport.close()
       this.clients.delete(id)
@@ -135,6 +146,8 @@ export class HubServer {
       id: clientId,
       transport,
       subscribedSessions: new Set(),
+      subscribedAll: false,
+      authenticated: this.config.authTokens.length === 0,
     }
     this.clients.set(clientId, client)
 
@@ -155,11 +168,18 @@ export class HubServer {
     method: string,
     params: Record<string, unknown>,
   ): Promise<unknown> {
+    if (method !== 'hub/handshake' && !client.authenticated) {
+      throw new Error('handshake required')
+    }
     switch (method) {
       case 'hub/handshake':
-        return this.handleHandshake(params)
+        return this.handleHandshake(client, params)
       case 'hub/list':
         return this.handleList()
+      case 'hub/workspaces':
+        return this.handleWorkspaces()
+      case 'hub/workspace-session/create':
+        return await this.handleWorkspaceSessionCreate(params as { workspaceId: string })
       case 'hub/create':
         return this.handleCreate(params as { meta: import('@deepseek-ai/dsh-session').SessionHeader })
       case 'hub/load':
@@ -170,6 +190,10 @@ export class HubServer {
         return this.handleInspect(params as { id: SessionId })
       case 'hub/delete':
         return this.handleDelete(params as { id: SessionId })
+      case 'hub/agent/message':
+        return this.handleAgentMessage(params as { id: SessionId; message: UserMessage; mode?: 'queue' | 'steer' })
+      case 'hub/agent/cancel':
+        return this.handleAgentCancel(params as { id: SessionId; cause?: 'user' | 'shutdown' | 'remote' })
       case 'hub/subscribe':
         return this.handleSubscribe(client, params)
       case 'hub/unsubscribe':
@@ -179,17 +203,18 @@ export class HubServer {
     }
   }
 
-  private handleHandshake(params: HubHandshakeParams): HubHandshakeResult {
+  private handleHandshake(client: ClientRecord, params: HubHandshakeParams): HubHandshakeResult {
     // Validate auth token.
     if (this.config.authTokens.length > 0) {
       if (!params.token || !this.config.authTokens.includes(params.token)) {
         throw new Error('authentication failed')
       }
     }
+    client.authenticated = true
 
     const capabilities: HubCapabilities = {
       subscriptions: true,
-      delete: true,
+      delete: false,
     }
 
     return {
@@ -216,6 +241,42 @@ export class HubServer {
     }
   }
 
+  /** List directories registered by the remote device's workspace service. */
+  private handleWorkspaces(): { workspaces: import('@deepseek-ai/dsh-hub-protocol').HubWorkspaceEntry[] } {
+    const registry = this.ctx.get('workspaceRegistry') as {
+      list: () => Array<{ id: string; title: string; path: string; sessionIds: SessionId[] }>
+    } | undefined
+    return {
+      workspaces: registry?.list().map(workspace => ({
+        id: workspace.id,
+        title: workspace.title,
+        path: workspace.path,
+        sessionIds: [...workspace.sessionIds],
+      })) ?? [],
+    }
+  }
+
+  private async handleWorkspaceSessionCreate(params: { workspaceId: string }): Promise<{ sessionId: SessionId }> {
+    const api = this.ctx.get('apiProxy') as {
+      sessions: {
+        create: (request: { rpcId: string; payload: { workspaceId: string } }) => Promise<{
+          result: { ok: true; value: { sessionId: SessionId } } | { ok: false; error: unknown }
+        }>
+      }
+    } | undefined
+    if (api === undefined) throw new Error('remote api proxy is unavailable')
+    const agentPreset = this.config.workspacePresets[params.workspaceId]
+    const response = await api.sessions.create({
+      rpcId: `hub-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      payload: {
+        workspaceId: params.workspaceId,
+        ...(agentPreset === undefined ? {} : { agentPreset }),
+      },
+    })
+    if (!response.result.ok) throw new Error(`remote session creation failed: ${JSON.stringify(response.result.error)}`)
+    return response.result.value
+  }
+
   private async handleCreate(
     params: { meta: import('@deepseek-ai/dsh-session').SessionHeader },
   ): Promise<{ id: SessionId }> {
@@ -229,14 +290,25 @@ export class HubServer {
   private async handleLoad(
     params: { id: SessionId },
   ): Promise<{ meta: import('@deepseek-ai/dsh-session').SessionHeader; events: import('@deepseek-ai/dsh-session').SessionEvent[] }> {
+    // A live session is authoritative while its write-behind persistence has
+    // not flushed the first event yet. This also keeps a newly created remote
+    // workspace session readable immediately after creation.
+    const live = this.ctx.sessions.get(params.id)
+    if (live !== undefined) {
+      return { meta: live.header, events: [...live.events] }
+    }
     const persistence = this.ctx.get('sessionPersistence')
     if (persistence === undefined) {
       const session = this.ctx.sessions.get(params.id)
       if (session === undefined) throw new Error(`session not found: ${params.id}`)
       return { meta: session.header, events: [...session.events] }
     }
-    const result = await persistence.load(params.id)
-    return { meta: result.meta, events: [...result.events] }
+    try {
+      const result = await persistence.load(params.id)
+      return { meta: result.meta, events: [...result.events] }
+    } catch (error) {
+      throw error
+    }
   }
 
   private async handleAppend(
@@ -252,21 +324,53 @@ export class HubServer {
   private async handleInspect(
     params: { id: SessionId },
   ): Promise<{ meta: import('@deepseek-ai/dsh-session').SessionHeader; events: import('@deepseek-ai/dsh-session').SessionEvent[] }> {
+    const live = this.ctx.sessions.get(params.id)
+    if (live !== undefined) {
+      return { meta: live.header, events: [...live.events] }
+    }
     const persistence = this.ctx.get('sessionPersistence')
     if (persistence === undefined) {
       const session = this.ctx.sessions.get(params.id)
       if (session === undefined) throw new Error(`session not found: ${params.id}`)
       return { meta: session.header, events: [...session.events] }
     }
-    const result = await persistence.inspect(params.id)
-    return { meta: result.meta, events: [...result.events] }
+    try {
+      const result = await persistence.inspect(params.id)
+      return { meta: result.meta, events: [...result.events] }
+    } catch (error) {
+      throw error
+    }
   }
 
   private handleDelete(params: { id: SessionId }): Record<string, never> {
-    // Session deletion is not directly supported by the current SessionPersistence API.
-    // For now, this is a no-op that returns success.
-    this.ctx.logger.info(`hub: delete requested for session ${params.id} (not yet implemented)`)
+    throw new Error(`session deletion is not supported: ${params.id}`)
+  }
+
+  private async handleAgentMessage(
+    params: { id: SessionId; message: UserMessage; mode?: 'queue' | 'steer' },
+  ): Promise<{ accepted: true }> {
+    const agent = await this.ensureAgent(params.id)
+    if (params.mode === 'steer') agent.steer(params.message)
+    else agent.followup(params.message)
+    return { accepted: true }
+  }
+
+  private async handleAgentCancel(
+    params: { id: SessionId; cause?: 'user' | 'shutdown' | 'remote' },
+  ): Promise<Record<string, never>> {
+    const agent = await this.ensureAgent(params.id)
+    agent.cancel({ kind: params.cause === 'user' ? 'user' : 'parent' })
     return {}
+  }
+
+  private async ensureAgent(id: SessionId): Promise<import('@deepseek-ai/dsh-agent').Agent> {
+    const live = this.ctx.agents.get(id)
+    if (live !== undefined) return live
+    const retained = this.resumedAgents.get(id)
+    if (retained !== undefined) return retained.agent
+    const handle = await this.ctx.agents.resume({ resumeSessionId: id })
+    this.resumedAgents.set(id, handle)
+    return handle.agent
   }
 
   private handleSubscribe(
@@ -275,7 +379,7 @@ export class HubServer {
   ): Record<string, never> {
     if (params.id) {
       client.subscribedSessions.add(params.id)
-    }
+    } else client.subscribedAll = true
     return {}
   }
 
@@ -286,6 +390,7 @@ export class HubServer {
     if (params.id) {
       client.subscribedSessions.delete(params.id)
     } else {
+      client.subscribedAll = false
       client.subscribedSessions.clear()
     }
     return {}
@@ -298,7 +403,7 @@ export class HubServer {
     notification: HubEventNotification | HubStatusNotification,
   ): void {
     for (const client of this.clients.values()) {
-      if (client.subscribedSessions.size === 0 || client.subscribedSessions.has(sessionId)) {
+      if (client.subscribedAll || client.subscribedSessions.has(sessionId)) {
         try {
           client.transport.notify(method, notification)
         } catch {

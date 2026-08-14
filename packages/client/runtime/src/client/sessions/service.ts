@@ -423,6 +423,12 @@ export class SessionRuntime implements ISessions {
     this.manager.clearSelection()
   }
 
+  /** Add a remote Hub session to the ordinary session list and select it. */
+  adoptRemote(summary: import('@deepseek-ai/dsh-api-remotes/client').SessionSummary): void {
+    this.manager.adoptRemote(summary)
+    this.manager.select(summary.sessionId)
+  }
+
   /**
    * Refresh the real Session baseline, reusing an in-flight pull.
    * @returns completion of the current or newly started baseline pull.

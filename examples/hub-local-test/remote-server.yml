@@ -1,0 +1,13 @@
+# Local two-process test: run this on the simulated remote device.
+# Select the remote project from the server Web UI before using the client.
+
+- id: hub-server
+  disabled: false
+  config:
+    host: '127.0.0.1'
+    port: 8765
+    authTokens: ['dsh-local-test-token']
+    serverName: remote-local-test
+    # Optional: map the remote workspace id to a preset owned by this device.
+    # workspacePresets:
+    #   '<remote-workspace-id>': standard

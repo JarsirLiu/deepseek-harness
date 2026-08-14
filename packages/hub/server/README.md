@@ -6,7 +6,7 @@ Cordis plugin that exposes local Harness sessions over WebSocket JSON-RPC. Insta
 
 ## Configuration
 
-The plugin accepts `port`, `host`, `authTokens`, and `serverName` in its profile row. It owns the listening server and disposes it with the plugin fiber. Authentication tokens are optional in the schema but network exposure and TLS remain deployment responsibilities.
+The plugin accepts `port`, `host`, `authTokens`, and `serverName` in its profile row. It owns the listening server and disposes it with the plugin fiber. The default bind address is loopback; set an explicit non-loopback address only with authentication and a protected transport.
 
 ## Installation
 
@@ -31,3 +31,4 @@ None directly; the server does not change provider request assembly.
 ## Known Limitations and Deferred Work
 
 - **The listener is a deployment endpoint** — bind address, firewall, TLS, and token distribution must be configured by the deployment.
+- **Session deletion is not exposed** — the protocol advertises deletion as unsupported until the persistence seam provides a real deletion operation.

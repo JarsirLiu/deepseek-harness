@@ -201,6 +201,11 @@ export class SessionManager {
     this.notifier.notifyNow()
   }
 
+  /** Add a remote Hub session to the ordinary navigation list. */
+  adoptRemote(summary: SessionSummary): void {
+    this.recordMutation({ kind: 'upsert', summary })
+  }
+
   /**
    * Select a healthy child through its durable direct-parent address.
    * @param address - catalog-derived parent and child ids.

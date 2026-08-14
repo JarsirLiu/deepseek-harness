@@ -144,3 +144,43 @@
   color: var(--dsw-alias-label-tertiary);
   overflow-wrap: anywhere;
 }
+
+.workspaceList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--dsw-alias-border-l2);
+}
+
+.workspaceItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 0;
+}
+
+.workspaceItem input {
+  margin-top: 3px;
+  flex: none;
+}
+
+.workspaceItem > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chatLog {
+  min-height: 180px;
+  max-height: 420px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  white-space: pre-wrap;
+}
+
+.chatLog p { margin: 0 0 10px; }
+.chatLog p[data-role='assistant'] { color: var(--dsw-alias-label-primary); }
+.chatLog p[data-role='user'] { color: var(--dsw-alias-state-business-primary); }
+.row input { flex: 1; min-width: 0; }

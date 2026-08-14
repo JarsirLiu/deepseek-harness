@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-The browser settings section for the remote Hub connection. It registers one `settings.section` entry through the client slot system and reads the host-side `hub-client` status endpoint through an injected callback. The package contains presentation and request-result mapping only; the WebSocket connection and session persistence remain owned by [`dsh-hub-client`](../../hub/client/README.md).
+The browser settings section for the remote Hub connection. It registers status and Remote Chat entries through the client slot system. Remote Chat connects to the configured Hub, lists or creates sessions, streams events, sends prompts, and cancels active turns. The feature is plugin-owned; it does not modify Harness core or the local composer.
 
 ## Composition
 
@@ -34,3 +34,13 @@ None; the package never assembles or sends a provider request.
 
 - **Status is read-only** — changing the Hub URI or credentials belongs to profile configuration and is not edited from this section.
 - **The section depends on the host endpoint** — installing the UI package without `dsh-hub-client` renders the explicit not-configured state.
+
+Configure it with `@deepseek-ai/dsh-hub-client` and `@deepseek-ai/dsh-hub-server`:
+
+```yaml
+- name: '@deepseek-ai/dsh-hub-client'
+  config:
+    uri: 'ws://127.0.0.1:8765/hub'
+    token: 'local-test-token'
+- name: '@deepseek-ai/dsh-client-ui-hub'
+```

@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-Cordis plugin that connects to a remote Hub server and exposes its sessions through the Harness session provider. Install it on the machine running the browser or another client application; the optional [`dsh-client-ui-hub`](../../client/ui-hub/README.md) package displays its connection status.
+Cordis plugin that connects to a remote Hub server and exposes its sessions and Agent commands through the Harness client. Install it on the machine running the browser or another client application; the optional [`dsh-client-ui-hub`](../../client/ui-hub/README.md) package displays its connection status.
 
 ## Configuration
 
@@ -31,3 +31,4 @@ No additional effect; the session composition owns provider request assembly and
 ## Known Limitations and Deferred Work
 
 - **The UI is optional** — installing the client provider without `dsh-client-ui-hub` still provides remote sessions but no settings section.
+- **Web routing is deployment-owned** — `RemoteAgentClient` provides the remote execution face; the host API must select it for sessions configured for remote execution.

@@ -2,7 +2,8 @@
 # DeepSeek Harness instance, exposing local sessions over WebSocket JSON-RPC.
 # Applied as a bundle layer when the package is installed via `dsh plugin add`.
 #
-# Default config is permissive (autoConnect for client, 0.0.0.0 for server)
+# The disabled row defaults to loopback and still requires an explicit token for
+# any deployment that enables a non-loopback listener.
 # so the row is disabled by default — the user enables it and supplies an
 # auth token before starting.
 
@@ -12,6 +13,6 @@
       disabled: true
       config:
         port: 8765
-        host: '0.0.0.0'
+        host: '127.0.0.1'
         authTokens: []
         serverName: deepseek-harness-hub

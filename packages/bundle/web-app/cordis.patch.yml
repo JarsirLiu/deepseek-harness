@@ -94,6 +94,26 @@
     - id: plugin-inventory
       name: '@deepseek-ai/dsh-host-plugin-inventory'
 
+    # Optional remote-device transport. The rows are present in the Web
+    # bundle so local source checkouts can enable them through a patch without
+    # installing unpublished workspace packages into an isolated profile.
+    - id: hub-server
+      name: '@deepseek-ai/dsh-hub-server'
+      disabled: true
+      config:
+        port: 8765
+        host: '127.0.0.1'
+        authTokens: []
+        serverName: deepseek-harness-hub
+
+    - id: hub-client
+      name: '@deepseek-ai/dsh-hub-client'
+      disabled: true
+      config:
+        uri: ''
+        token: ''
+        autoConnect: true
+
     # The API gateway: the transport-agnostic dispatch face every client shape
     # shares. The base layer's agent-default-model service owns the default model.
     - id: api-gateway
@@ -194,6 +214,9 @@
 
     - id: ui-settings-plugin-inventory
       name: '@deepseek-ai/dsh-client-ui-settings-plugin-inventory'
+
+    - id: ui-hub
+      name: '@deepseek-ai/dsh-client-ui-hub'
 
     - id: ui-conversation
       name: '@deepseek-ai/dsh-client-ui-conversation'
