@@ -69,6 +69,17 @@ describe('Hub Web adapter endpoint ownership', () => {
     expect(() => registry.resolve({ endpointId: 'remote:first', sessionId: 'same-session' as SessionId })).toThrow(/remote endpoint unavailable/)
   })
 
+  it('rejects duplicate endpoints and exposes registered transports', () => {
+    const registry = new RemoteSessionTransportRegistry()
+    const transport = createRemoteSessionTransport('remote:first')
+    const dispose = registry.register(transport)
+    expect(registry.get('remote:first')).toBe(transport)
+    expect(registry.get('remote:missing')).toBeUndefined()
+    expect(() => registry.register(transport)).toThrow(/already registered/)
+    dispose()
+    dispose()
+  })
+
   it('rejects local references at the remote registry', () => {
     const registry = new RemoteSessionTransportRegistry()
     registry.register(createRemoteSessionTransport('remote:first'))
@@ -100,6 +111,28 @@ describe('Hub Web adapter endpoint ownership', () => {
         method: 'hub/api/request',
         params: { method: 'session.history', payload: { sessionId: 'session-1', maxMessages: 5 } },
       })
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  it('preserves history without inventing an empty projection block', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      result: { ok: true, value: { events: [], hasMore: false } },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    try {
+      await expect(createRemoteSessionTransport('remote:first').history('session-1' as SessionId, {}))
+        .resolves.toEqual({ ok: true, value: { events: [], hasMore: false } })
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  it('returns history transport errors without rewriting them', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 400 }))
+    try {
+      await expect(createRemoteSessionTransport('remote:first').history('session-1' as SessionId, {}))
+        .resolves.toMatchObject({ ok: false, error: { message: 'HTTP 400' } })
     } finally {
       fetch.mockRestore()
     }
@@ -157,7 +190,7 @@ describe('Hub Web adapter endpoint ownership', () => {
     ['fork', (transport: ReturnType<typeof createRemoteSessionTransport>) => transport.fork('session-1' as SessionId, 3)],
     ['subagentList', (transport: ReturnType<typeof createRemoteSessionTransport>) => transport.subagentList('session-1' as SessionId)],
   ])('unwraps the official RpcResult for %s', async (_name, invoke) => {
-    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({
       result: { ok: true, value: { accepted: true } },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     try {
@@ -173,6 +206,87 @@ describe('Hub Web adapter endpoint ownership', () => {
     try {
       await expect(createRemoteSessionTransport('remote:first').prompt('session-1' as SessionId, [], 'queue'))
         .resolves.toMatchObject({ ok: false, error: { code: 'internal', message: 'HTTP 502' } })
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  it('forwards every session and subagent operation through the same API method', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({
+      result: { ok: true, value: { accepted: true } },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    const transport = createRemoteSessionTransport('remote:first')
+    const address = { parentSessionId: 'parent' as SessionId, childSessionId: 'child' as SessionId, mode: 'continuable' as const }
+    try {
+      await transport.readAttachment('session-1' as SessionId, 'attachment-1' as never)
+      await transport.archiveSession('session-1' as SessionId)
+      await transport.subagentHistory(address, { maxMessages: 4 })
+      await transport.subagentPrompt(address, [{ type: 'text', text: 'hello' }])
+      await transport.subagentInterrupt(address)
+      const methods = fetch.mock.calls.map(call => JSON.parse(String((call[1] as RequestInit).body)).params.method)
+      expect(methods).toEqual([
+        'session.attachment', 'workspace.archiveSession', 'subagent.history',
+        'subagent.prompt', 'subagent.interrupt',
+      ])
+    } finally {
+      fetch.mockRestore()
+    }
+  })
+
+  it('shares and reconnects the mux EventSource, and forwards host frames', () => {
+    class FakeEventSource {
+      static instances: FakeEventSource[] = []
+      onmessage: ((event: MessageEvent) => void) | null = null
+      onerror: (() => void) | null = null
+      close = vi.fn()
+      constructor(readonly url: string) { FakeEventSource.instances.push(this) }
+    }
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const transport = createRemoteSessionTransport('remote:first')
+    const first = vi.fn()
+    const second = vi.fn()
+    const disposeFirst = transport.subscribe('session-1' as SessionId, first)
+    const disposeSecond = transport.subscribe('session-1' as SessionId, second)
+    const source = FakeEventSource.instances[0]!
+    source.onmessage?.({ data: JSON.stringify({ endpointId: 'remote:first', sessionId: 'other', event: {} }) } as MessageEvent)
+    source.onmessage?.({ data: JSON.stringify({ endpointId: 'remote:first', sessionId: 'session-1', event: { seq: 1 } }) } as MessageEvent)
+    expect(first).toHaveBeenCalledOnce()
+    expect(second).toHaveBeenCalledOnce()
+    disposeFirst()
+    source.onerror?.()
+    const reconnected = FakeEventSource.instances.at(-1)!
+    expect(reconnected).not.toBe(source)
+    const host = vi.fn()
+    const disposeHost = transport.subscribeHost(host)
+    const hostSource = FakeEventSource.instances.at(-1)!
+    hostSource.onmessage?.({ data: JSON.stringify({ frame: { type: 'host/session-status' } }) } as MessageEvent)
+    expect(host).toHaveBeenCalledWith({ type: 'host/session-status' })
+    disposeHost()
+    disposeSecond()
+    expect(reconnected.close).toHaveBeenCalled()
+    reconnected.onerror?.()
+    vi.unstubAllGlobals()
+  })
+
+  it('requires remote endpoint identities and follows dynamic endpoint ownership', () => {
+    expect(() => createRemoteSessionTransport('local:default')).toThrow(/requires a remote endpoint/)
+    let endpoint: 'remote:first' | 'remote:second' = 'remote:first'
+    const transport = createRemoteSessionTransport(() => endpoint)
+    expect(transport.endpointId).toBe('remote:first')
+    expect(transport.owns({ endpointId: 'remote:first', sessionId: 'session-1' as SessionId })).toBe(true)
+    endpoint = 'remote:second'
+    expect(transport.endpointId).toBe('remote:second')
+    expect(transport.owns({ endpointId: 'remote:first', sessionId: 'session-1' as SessionId })).toBe(false)
+  })
+
+  it('omits an undefined fork sequence from the forwarded payload', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({
+      result: { ok: true, value: { sessionId: 'forked' } },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    try {
+      await createRemoteSessionTransport('remote:first').fork('session-1' as SessionId)
+      expect(JSON.parse(String((fetch.mock.calls[0]?.[1] as RequestInit).body)).params.payload)
+        .toEqual({ sessionId: 'session-1' })
     } finally {
       fetch.mockRestore()
     }

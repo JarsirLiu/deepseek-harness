@@ -195,18 +195,19 @@ export class RemoteSessionProvider {
    * @returns disposer that removes the listener.
    */
   subscribe(sessionId: SessionId, listener: (notification: HubEventNotification) => void): () => void {
-    if (!this.eventListeners.has(String(sessionId))) {
-      this.eventListeners.set(String(sessionId), new Set())
+    const key = String(sessionId)
+    let listeners = this.eventListeners.get(key)
+    if (!listeners) {
+      listeners = new Set()
+      this.eventListeners.set(key, listeners)
     }
-    const listeners = this.eventListeners.get(String(sessionId))
-    if (listeners === undefined) throw new Error('event listener set was not registered')
     const wasEmpty = listeners.size === 0
     listeners.add(listener)
     if (wasEmpty) {
       void this.request('hub/subscribe', { id: sessionId })
     }
     return () => {
-      const current = this.eventListeners.get(String(sessionId))
+      const current = this.eventListeners.get(key)
       if (current?.delete(listener) && current.size === 0) {
         void this.request('hub/unsubscribe', { id: sessionId })
       }
