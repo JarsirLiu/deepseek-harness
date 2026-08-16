@@ -132,6 +132,8 @@ function questionInteractionStatus(
 export class SessionManager {
   private readonly sessions = new Map<SessionId, Session>()
   private readonly remoteSessions = new Map<SessionId, SessionTransport>()
+  /** Remote sessions currently included by the selected workspace projection. */
+  private readonly visibleRemoteSessions = new Set<SessionId>()
   private readonly remoteSubscriptions = new Map<SessionId, () => void>()
   private readonly remoteHostSubscriptions = new Map<`remote:${string}`, () => void>()
   /** Pre-instantiation buffer for answerable requests and the queued-turn snapshot, which history
@@ -445,6 +447,8 @@ export class SessionManager {
         } })
       }
     }
+    this.visibleRemoteSessions.clear()
+    for (const id of next) this.visibleRemoteSessions.add(id)
     for (const id of this.remoteSessions.keys()) {
       if (next.has(id)) continue
       this.remoteSessions.delete(id)
@@ -958,6 +962,9 @@ export class SessionManager {
    */
   handleHostEnvelope(envelope: RpcRequest<HostFrame>): void {
     const frame = envelope.payload
+    const remoteSessionId = 'sessionId' in frame ? frame.sessionId : undefined
+    if (remoteSessionId !== undefined && parseQualifiedSessionId(remoteSessionId) !== undefined
+      && !this.visibleRemoteSessions.has(remoteSessionId)) return
     switch (frame.type) {
       case 'host/session-added': {
         this.mergeSummary({

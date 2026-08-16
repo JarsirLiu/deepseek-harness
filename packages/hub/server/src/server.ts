@@ -10,6 +10,8 @@ import { createServer } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import { isHostFrameVisibleToWorkspaces, type WorkspaceSubscriptionEntry } from './workspace-subscription.ts'
+export { isHostFrameVisibleToWorkspaces } from './workspace-subscription.ts'
 import {
   JsonRpcWebSocketTransport,
   type HubHandshakeParams,
@@ -26,6 +28,7 @@ interface ClientRecord {
   transport: JsonRpcWebSocketTransport
   subscribedSessions: Set<SessionId>
   subscribedAll: boolean
+  subscribedWorkspaces: Set<string>
   authenticated: boolean
   hostAbortController?: AbortController
 }
@@ -151,6 +154,7 @@ export class HubServer {
       transport,
       subscribedSessions: new Set(),
       subscribedAll: false,
+      subscribedWorkspaces: new Set(),
       authenticated: this.config.authTokens.length === 0,
     }
     this.clients.set(clientId, client)
@@ -189,6 +193,8 @@ export class HubServer {
         return this.handleSubscribe(client, params)
       case 'hub/unsubscribe':
         return this.handleUnsubscribe(client, params)
+      case 'hub/subscribe-workspaces':
+        return this.handleWorkspaceSubscription(client, params as { workspaceIds?: string[] })
       default:
         throw new Error(`unknown hub method: ${method}`)
     }
@@ -234,6 +240,7 @@ export class HubServer {
     void (async () => {
       try {
         for await (const envelope of host({ rpcId: `hub-host-${randomUUID()}`, payload: {} }, controller.signal)) {
+          if (!isHostFrameVisibleToWorkspaces(envelope.payload, client.subscribedWorkspaces, this.workspaceEntries())) continue
           const notification: HubHostNotification = { endpointId: this.config.endpointId, frame: envelope.payload }
           try { client.transport.notify('hub/host', notification) } catch { return }
         }
@@ -248,6 +255,18 @@ export class HubServer {
         }
       }
     })()
+  }
+
+  /** Update the workspace filter applied before forwarding the host stream. */
+  private handleWorkspaceSubscription(client: ClientRecord, params: { workspaceIds?: string[] }): Record<string, never> {
+    client.subscribedWorkspaces = new Set(params.workspaceIds ?? [])
+    return {}
+  }
+
+  /** Read the current workspace membership used by the host stream filter. */
+  private workspaceEntries(): WorkspaceSubscriptionEntry[] {
+    const registry = this.ctx.get('workspaceRegistry') as { list: () => Array<{ id: string; sessionIds: SessionId[] }> } | undefined
+    return registry?.list() ?? []
   }
 
   private async handleList(): Promise<{ sessions: { header: import('@deepseek-ai/dsh-session').SessionHeader }[] }> {

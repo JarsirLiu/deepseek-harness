@@ -1,8 +1,40 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { SessionId } from '@deepseek-ai/dsh-api-remotes/client'
-import { createRemoteSessionTransport, RemoteSessionTransportRegistry, resolveRemoteSessionTransport } from '../src/index.ts'
+import { createRemoteSessionTransport, parseQualifiedSessionId, qualifiedSessionId, RemoteSessionTransportRegistry, resolveRemoteSessionTransport, SessionEndpointRegistry, sessionKey } from '../src/index.ts'
 
 describe('Hub Web adapter endpoint ownership', () => {
+  it('encodes and parses endpoint-qualified session references', () => {
+    const ref = { endpointId: 'remote:first' as const, sessionId: 'same-session' as SessionId }
+    expect(sessionKey(ref)).toBe('remote:first|same-session')
+    expect(qualifiedSessionId(ref)).toBe('remote:first|same-session')
+    expect(parseQualifiedSessionId(qualifiedSessionId(ref))).toEqual(ref)
+    expect(parseQualifiedSessionId('same-session' as SessionId)).toBeUndefined()
+    expect(parseQualifiedSessionId('local:default|same-session' as SessionId)).toBeUndefined()
+    expect(parseQualifiedSessionId('remote:first|' as SessionId)).toEqual({ endpointId: 'remote:first', sessionId: '' })
+  })
+
+  it('detects ambiguous bare session ownership and removes all matches', () => {
+    const registry = new SessionEndpointRegistry()
+    const sessionId = 'same-session' as SessionId
+    registry.bind({ endpointId: 'remote:first', sessionId })
+    expect(registry.resolve({ endpointId: 'remote:first', sessionId })).toBe('remote:first')
+    expect(registry.endpointFor(sessionId)).toBe('remote:first')
+    registry.bind({ endpointId: 'remote:second', sessionId })
+    expect(() => registry.endpointFor(sessionId)).toThrow(/multiple endpoints/)
+    registry.remove(sessionId)
+    expect(registry.resolve({ endpointId: 'remote:first', sessionId })).toBeUndefined()
+    expect(registry.endpointFor(sessionId)).toBeUndefined()
+  })
+
+  it('ignores unrelated bindings when resolving or removing a bare id', () => {
+    const registry = new SessionEndpointRegistry()
+    registry.bind({ endpointId: 'remote:first', sessionId: 'other-session' as SessionId })
+    registry.bind({ endpointId: 'remote:second', sessionId: 'same-session' as SessionId })
+    expect(registry.endpointFor('missing-session' as SessionId)).toBeUndefined()
+    registry.remove('missing-session' as SessionId)
+    expect(registry.endpointFor('same-session' as SessionId)).toBe('remote:second')
+  })
+
   it('does not let one endpoint claim another endpoint session', () => {
     const first = createRemoteSessionTransport('remote:first')
     const second = createRemoteSessionTransport('remote:second')

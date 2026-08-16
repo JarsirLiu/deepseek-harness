@@ -259,4 +259,5 @@ export interface HubRequestMap {
   'hub/workspaces': { params: { workspaceIds?: string[] }; result: HubWorkspaceListResult }
   'hub/subscribe': { params: HubSubscribeParams; result: HubAppendResult }
   'hub/unsubscribe': { params: HubSubscribeParams; result: HubAppendResult }
+  'hub/subscribe-workspaces': { params: { workspaceIds?: string[] }; result: HubAppendResult }
 }

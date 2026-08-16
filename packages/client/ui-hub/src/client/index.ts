@@ -60,6 +60,7 @@ export function apply(ctx: ClientContext): void {
     listSelected: async () => {
       const selected = readSelectedWorkspaceIds()
       const result = await rpc<HubWorkspaceListResult>('hub/workspaces', { workspaceIds: selected })
+      await rpc('hub/subscribe-workspaces', { workspaceIds: selected })
       const endpointChanged = endpointId !== result.endpointId
       endpointId = result.endpointId
       if (endpointChanged) bindTransport()

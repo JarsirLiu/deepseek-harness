@@ -112,7 +112,6 @@ export class RemoteSessionProvider {
       }) as HubHandshakeResult
 
       this.state = 'connected'
-      await transport.request('hub/subscribe', {})
 
       // Route notifications through the protocol transport so requests and
       // notifications share one parser and one WebSocket lifecycle.
@@ -225,10 +224,21 @@ export class RemoteSessionProvider {
     }
   }
 
+  /** Subscribe to connection and session status notifications. */
+  onStatus(listener: (notification: HubStatusNotification) => void): () => void {
+    this.statusListeners.add(listener)
+    return () => { this.statusListeners.delete(listener) }
+  }
+
   /** Subscribe to unchanged frames from the remote api.events.host stream. */
   onHostFrame(listener: (notification: HubHostNotification) => void): () => void {
     this.hostListeners.add(listener)
     return () => { this.hostListeners.delete(listener) }
+  }
+
+  /** Restrict the host stream to workspaces selected by the Web client. */
+  subscribeWorkspaces(workspaceIds: readonly string[]): Promise<unknown> {
+    return this.request('hub/subscribe-workspaces', { workspaceIds: [...workspaceIds] })
   }
 
   /** Ensure the transport is available. */
