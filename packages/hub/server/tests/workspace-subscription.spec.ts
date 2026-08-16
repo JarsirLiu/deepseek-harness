@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { HostFrame } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import { isHostFrameVisibleToWorkspaces } from '../src/workspace-subscription.ts'
 
-const selected = new Set(['workspace-a'])
-const workspaces = [{ id: 'workspace-a', path: 'D:/projects/a', sessionIds: ['session-a' as SessionId] }]
+const selected = new Set<WorkspaceId>(['workspace-a' as WorkspaceId])
+const workspaces = [{ id: 'workspace-a' as WorkspaceId, path: 'D:/projects/a', sessionIds: ['session-a' as SessionId] }]
 
 describe('Hub workspace event filtering', () => {
   it('rejects every frame when no workspace is selected', () => {
