@@ -346,6 +346,7 @@ export function apply(ctx: Context, config: HubClientConfig): void {
           'Cache-Control': 'no-cache',
           Connection: 'keep-alive',
         })
+        response.write(': connected\n\n')
         const unsubscribe = provider.subscribe(id as import('@deepseek-ai/dsh-session').SessionId, (notification) => {
           response.write(`data: ${JSON.stringify(notification)}\n\n`)
         })

@@ -449,20 +449,23 @@ export class SessionManager {
       try {
         const remoteParent = parseQualifiedSessionId(parentSessionId)
         const remoteTransport = remoteParent === undefined ? undefined : this.remoteRegistry?.resolve(remoteParent)
-        const result = remoteTransport === undefined
+        const result = remoteParent === undefined
           ? (await this.api.subagents.list({ parentSessionId })).result
-          : await remoteTransport.subagentList(remoteParent.sessionId)
+          : remoteTransport === undefined
+            ? { ok: false as const, error: { code: 'internal' as const, message: `remote endpoint unavailable: ${remoteParent.endpointId}`, details: {} } }
+            : await remoteTransport.subagentList(remoteParent.sessionId)
         if (result.ok) {
+          const entries = remoteParent === undefined
+            ? result.value.entries
+            : result.value.entries.map(entry => ({
+              ...entry,
+              id: qualifiedSessionId({ endpointId: remoteParent.endpointId, sessionId: entry.id }),
+            }))
           const parentAvailable = this.catalogInflight.get(parentSessionId)?.parentAvailableOverride
             ?? result.value.parentAvailable
           this.catalogs.set(parentSessionId, {
             ...result.value,
-            entries: this.withCatalogMutations(remoteParent === undefined
-              ? result.value.entries
-              : result.value.entries.map(entry => ({
-                ...entry,
-                id: qualifiedSessionId({ endpointId: remoteParent.endpointId, sessionId: entry.id }),
-              })), expandableRows, activityRows),
+            entries: this.withCatalogMutations(entries, expandableRows, activityRows),
             parentAvailable,
             state: 'ready',
             error: null,

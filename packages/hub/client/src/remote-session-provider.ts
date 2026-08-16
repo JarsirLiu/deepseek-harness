@@ -147,39 +147,30 @@ export class RemoteSessionProvider {
       this.state = 'connected'
       await transport.request('hub/subscribe', {})
 
-      // Set up notification handlers.
-      ws.on('message', (data) => {
-        try {
-          const text = Buffer.isBuffer(data)
-            ? data.toString()
-            : Array.isArray(data)
-              ? Buffer.concat(data).toString()
-              : Buffer.from(data).toString()
-          const message: unknown = JSON.parse(text)
-          if (!isRecord(message)) return
-          if (message.method === 'hub/event' && isRecord(message.params)) {
-            const notification = message.params as unknown as HubEventNotification
-            const listeners = this.eventListeners.get(String(notification.sessionId))
-            if (listeners) {
-              for (const listener of listeners) {
-                try { listener(notification) } catch { /* ignore */ }
-              }
-            }
-            // Also notify wildcard listeners.
-            const wildcard = this.eventListeners.get('*')
-            if (wildcard) {
-              for (const listener of wildcard) {
-                try { listener(notification) } catch { /* ignore */ }
-              }
-            }
-          } else if (message.method === 'hub/status' && isRecord(message.params)) {
-            const notification = message.params as unknown as HubStatusNotification
-            for (const listener of this.statusListeners) {
+      // Route notifications through the protocol transport so requests and
+      // notifications share one parser and one WebSocket lifecycle.
+      transport.onNotification((method, params) => {
+        if (method === 'hub/event') {
+          const notification = params as unknown as HubEventNotification
+          const listeners = this.eventListeners.get(String(notification.sessionId))
+          if (listeners) {
+            for (const listener of listeners) {
               try { listener(notification) } catch { /* ignore */ }
             }
           }
-        } catch {
-          // Ignore parse errors.
+          const wildcard = this.eventListeners.get('*')
+          if (wildcard) {
+            for (const listener of wildcard) {
+              try { listener(notification) } catch { /* ignore */ }
+            }
+          }
+          return
+        }
+        if (method === 'hub/status') {
+          const notification = params as unknown as HubStatusNotification
+          for (const listener of this.statusListeners) {
+            try { listener(notification) } catch { /* ignore */ }
+          }
         }
       })
 
@@ -336,8 +327,4 @@ export class RemoteSessionProvider {
       revision: { kind: 'remote', seq: s.header.createdAt } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistenceRevision,
     }))
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object'
 }
