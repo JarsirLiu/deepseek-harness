@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { SessionId } from '@deepseek-ai/dsh-api-remotes/client'
 import { createRemoteSessionTransport, RemoteSessionTransportRegistry, resolveRemoteSessionTransport } from '../src/index.ts'
 
@@ -42,5 +42,32 @@ describe('Hub Web adapter endpoint ownership', () => {
     registry.register(createRemoteSessionTransport('remote:first'))
 
     expect(() => registry.resolve({ endpointId: 'local:default', sessionId: 'same-session' as SessionId })).toThrow(/local session cannot use/)
+  })
+
+  it('preserves the official history view and projection baseline', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      events: [{ event: { seq: 1, type: 'tool/result', data: {} }, view: { for: 'tool', card: 'chart' } }],
+      hasMore: true,
+      projections: { asOfSeq: 1, values: { permissions: { currentValue: 'workspace-write', options: [] } } },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    try {
+      const result = await createRemoteSessionTransport('remote:first').history('session-1' as SessionId, { maxMessages: 5 })
+      expect(result).toMatchObject({
+        ok: true,
+        value: {
+          events: [{ view: { for: 'tool', card: 'chart' } }],
+          hasMore: true,
+          projections: { asOfSeq: 1, values: { permissions: { currentValue: 'workspace-write' } } },
+        },
+      })
+      expect(fetch.mock.calls[0]?.[0]).toBe('/api/hub/rpc')
+      expect(fetch.mock.calls[0]?.[1]).toMatchObject({ method: 'POST' })
+      expect(JSON.parse(String((fetch.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
+        method: 'hub/session/history',
+        params: { id: 'session-1', maxMessages: 5 },
+      })
+    } finally {
+      fetch.mockRestore()
+    }
   })
 })

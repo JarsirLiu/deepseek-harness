@@ -150,6 +150,14 @@ export interface HubAgentCancelParams {
   cause?: 'user' | 'shutdown' | 'remote'
 }
 
+/** Parameters for forwarding the official Sessions API prompt request. */
+export interface HubSessionPromptParams {
+  id: SessionId
+  content: unknown[]
+  mode: 'queue' | 'steer'
+  clientTimeZone?: string
+}
+
 /** Result of cancelling a remote Agent turn. */
 export type HubAgentCancelResult = Record<string, never>
 
@@ -257,6 +265,7 @@ export interface HubRequestMap {
   'hub/delete': { params: HubDeleteParams; result: HubDeleteResult }
   'hub/agent/message': { params: HubAgentMessageParams; result: HubAgentMessageResult }
   'hub/agent/cancel': { params: HubAgentCancelParams; result: HubAgentCancelResult }
+  'hub/session/prompt': { params: HubSessionPromptParams; result: { accepted: true } }
   'hub/subscribe': { params: HubSubscribeParams; result: HubAppendResult }
   'hub/unsubscribe': { params: HubSubscribeParams; result: HubAppendResult }
 }

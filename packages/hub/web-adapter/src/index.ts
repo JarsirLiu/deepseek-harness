@@ -9,6 +9,7 @@
 
 import type { AttachmentIdType, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { HistoryEntry, MessageId, ModelSelection, MuxFrame, PromptContentPart, QueueAction, RpcResult, SessionId, SessionModels, SubagentAddress, SubagentCatalog } from '@deepseek-ai/dsh-api-remotes/client'
+import type { SessionProjectionsBlock } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { SessionEndpointId, SessionRef } from './endpoint-registry.ts'
 export { SessionEndpointRegistry, parseQualifiedSessionId, qualifiedSessionId, sessionKey } from './endpoint-registry.ts'
 export type { SessionEndpointId, SessionKey, SessionRef } from './endpoint-registry.ts'
@@ -137,8 +138,13 @@ function failure<T>(response: Response): RpcResult<T> {
   return { ok: false, error: { code: 'internal', message: `HTTP ${response.status}`, details: {} } }
 }
 
-async function get<T>(path: string): Promise<RpcResult<T>> {
-  const response = await globalThis.fetch(path, { credentials: 'same-origin' })
+async function call<T>(method: string, params: Record<string, unknown>): Promise<RpcResult<T>> {
+  const response = await globalThis.fetch('/api/hub/rpc', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ method, params }),
+  })
   if (!response.ok) return failure(response)
   return { ok: true, value: await response.json() as T }
 }
@@ -155,31 +161,33 @@ export function createRemoteSessionTransport(endpointId: SessionEndpointId | (()
     get endpointId() { return resolveEndpoint() as `remote:${string}` },
     owns: ref => ref.endpointId === resolveEndpoint(),
     history: async (sessionId, payload) => {
-      const result = await get<RemoteHistoryResponse>(`/api/hub/session/load?id=${encode(sessionId)}`)
+      const result = await call<RemoteHistoryResponse>('hub/session/history', { id: sessionId, ...payload })
       if (!result.ok) return result
       return {
         ok: true,
         value: {
-          events: normalizeHistory(result.value.events, payload),
-          hasMore: false,
+          events: result.value.events,
+          hasMore: result.value.hasMore,
+          ...(result.value.projections === undefined ? {} : { projections: result.value.projections }),
         },
       }
     },
-    prompt: async (sessionId, content, mode) => {
-      const text = content.filter((part): part is Extract<PromptContentPart, { type: 'text' }> => part.type === 'text').map(part => part.text).join('\n')
-      return get(`/api/hub/session/message?id=${encode(sessionId)}&text=${encode(text)}&mode=${encode(mode)}`)
-    },
-    cancel: sessionId => get(`/api/hub/session/cancel?id=${encode(sessionId)}`),
-    models: sessionId => get(`/api/hub/session/models?id=${encode(sessionId)}`),
-    selectModel: (sessionId, selection) => get(`/api/hub/session/select-model?id=${encode(sessionId)}&provider=${encode(selection.provider)}&model=${encode(selection.model)}${selection.reasoningEffort === undefined ? '' : `&reasoningEffort=${encode(selection.reasoningEffort)}`}`),
-    rename: (sessionId, title) => get(`/api/hub/session/rename?id=${encode(sessionId)}&title=${encode(title)}`),
-    updateQueue: (sessionId, itemId, action) => get(`/api/hub/session/update-queue?id=${encode(sessionId)}&itemId=${encode(itemId)}&action=${encode(JSON.stringify(action))}`),
-    readAttachment: (sessionId, attachmentId) => get(`/api/hub/session/attachment?id=${encode(sessionId)}&attachmentId=${encode(attachmentId)}`),
-    fork: (sessionId, atSeq) => get(`/api/hub/session/fork?id=${encode(sessionId)}${atSeq === undefined ? '' : `&atSeq=${encode(atSeq)}`}`),
-    subagentList: parentSessionId => get(`/api/hub/subagent/list?parentSessionId=${encode(parentSessionId)}`),
-    subagentHistory: (address, payload) => get(`/api/hub/subagent/history?parentSessionId=${encode(address.parentSessionId)}&childSessionId=${encode(address.childSessionId)}&mode=${encode(address.mode)}${payload.beforeSeq === undefined ? '' : `&beforeSeq=${encode(payload.beforeSeq)}`}${payload.maxMessages === undefined ? '' : `&maxMessages=${encode(payload.maxMessages)}`}`),
-    subagentPrompt: (address, content) => get(`/api/hub/subagent/prompt?parentSessionId=${encode(address.parentSessionId)}&childSessionId=${encode(address.childSessionId)}&mode=${encode(address.mode)}&content=${encode(JSON.stringify(content))}`),
-    subagentInterrupt: address => get(`/api/hub/subagent/interrupt?parentSessionId=${encode(address.parentSessionId)}&childSessionId=${encode(address.childSessionId)}&mode=${encode(address.mode)}`),
+    prompt: (sessionId, content, mode) => call('hub/session/prompt', {
+      id: sessionId,
+      content,
+      mode,
+    }),
+    cancel: sessionId => call('hub/agent/cancel', { id: sessionId, cause: 'user' }),
+    models: sessionId => call('hub/session/models', { id: sessionId }),
+    selectModel: (sessionId, selection) => call('hub/session/select-model', { id: sessionId, ...selection }),
+    rename: (sessionId, title) => call('hub/session/rename', { id: sessionId, title }),
+    updateQueue: (sessionId, itemId, action) => call('hub/session/update-queue', { id: sessionId, itemId, action }),
+    readAttachment: (sessionId, attachmentId) => call('hub/session/attachment', { id: sessionId, attachmentId }),
+    fork: (sessionId, atSeq) => call('hub/session/fork', { id: sessionId, ...(atSeq === undefined ? {} : { atSeq }) }),
+    subagentList: parentSessionId => call('hub/subagent/list', { parentSessionId }),
+    subagentHistory: (address, payload) => call('hub/subagent/history', { ...address, ...payload }),
+    subagentPrompt: (address, content) => call('hub/subagent/prompt', { ...address, content }),
+    subagentInterrupt: address => call('hub/subagent/interrupt', address),
     subscribe: (sessionId, listener) => {
       const source = new EventSource(`/api/hub/session/stream?id=${encode(sessionId)}`)
       source.onmessage = (event) => {
@@ -192,21 +200,7 @@ export function createRemoteSessionTransport(endpointId: SessionEndpointId | (()
 }
 
 type RemoteHistoryResponse = {
-  events: readonly (HistoryEntry | import('@deepseek-ai/dsh-session').SessionEvent)[]
-}
-
-function normalizeHistory(
-  events: readonly (HistoryEntry | import('@deepseek-ai/dsh-session').SessionEvent)[],
-  payload: { beforeSeq?: number; maxMessages?: number },
-): HistoryEntry[] {
-  const entries = events.map((entry): HistoryEntry => 'event' in entry
-    ? entry
-    : { event: entry })
-  const beforeSeq = payload.beforeSeq
-  const before = beforeSeq === undefined
-    ? entries.length
-    : entries.findIndex(entry => entry.event.seq >= beforeSeq)
-  const end = before === -1 ? entries.length : before
-  const start = payload.maxMessages === undefined ? 0 : Math.max(0, end - payload.maxMessages)
-  return entries.slice(start, end)
+  events: HistoryEntry[]
+  hasMore: boolean
+  projections?: SessionProjectionsBlock
 }

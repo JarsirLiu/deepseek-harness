@@ -8,7 +8,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { HubWorkspaceListResult } from '@deepseek-ai/dsh-hub-protocol'
-import { RemoteAgentClient, RemoteSessionProvider } from './remote-session-provider.ts'
+import { RemoteSessionProvider } from './remote-session-provider.ts'
 
 export { RemoteAgentClient, RemoteSessionProvider, HubConnectionError } from './remote-session-provider.ts'
 export type { RemoteHubConfig } from './remote-session-provider.ts'
@@ -42,7 +42,7 @@ export const Config: Schema<HubClientConfig> = Schema.object({
 /**
  * Apply the hub client plugin: create a remote session provider and register
  * it as a dedicated remoteSessionProvider service. It also registers Hub
- * status and forwarding endpoints on the webServer service when available.
+ * status and RPC endpoints on the webServer service when available.
  * @param ctx - Cordis context.
  * @param config - Plugin configuration.
  */
@@ -52,9 +52,6 @@ export function apply(ctx: Context, config: HubClientConfig): void {
     ...(config.token ? { token: config.token } : {}),
     ...(config.reconnectDelay === undefined ? {} : { reconnectDelay: config.reconnectDelay }),
   })
-  const remoteAgent = new RemoteAgentClient(provider)
-  ctx.provide('remoteAgent', remoteAgent)
-
   // Keep remote transport separate from the process-wide local persistence.
   ctx.provide('remoteSessionProvider', provider)
 
@@ -63,6 +60,30 @@ export function apply(ctx: Context, config: HubClientConfig): void {
     | { register: (route: { kind: string; path: string; handler: (req: unknown, res: unknown) => void }) => () => void }
     | undefined
   if (webServer !== undefined) {
+    const rpcDispose = webServer.register({
+      kind: 'exact',
+      path: '/api/hub/rpc',
+      handler: async (req: unknown, res: unknown) => {
+        const request = req as { on: (event: string, listener: (chunk: Buffer) => void) => void }
+        const response = res as { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void }
+        const chunks: Buffer[] = []
+        request.on('data', chunk => chunks.push(chunk))
+        request.on('end', async () => {
+          try {
+            const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { method?: string; params?: Record<string, unknown> }
+            if (typeof body.method !== 'string') throw new Error('method is required')
+            const result = await provider.request(body.method as never, body.params ?? {})
+            response.writeHead(200, { 'Content-Type': 'application/json' })
+            response.end(JSON.stringify(result))
+          } catch (error) {
+            response.writeHead(400, { 'Content-Type': 'application/json' })
+            response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
+          }
+        })
+      },
+    })
+    ctx.effect(() => rpcDispose, 'hub-client.webServer.rpc')
+
     const dispose = webServer.register({
       kind: 'exact',
       path: '/api/hub/status',
@@ -148,180 +169,6 @@ export function apply(ctx: Context, config: HubClientConfig): void {
       },
     })
     ctx.effect(() => createWorkspaceSessionDispose, 'hub-client.webServer.workspace-session-create')
-    const sessionLoadDispose = webServer.register({
-      kind: 'exact',
-      path: '/api/hub/session/load',
-      handler: async (req: unknown, res: unknown) => {
-        const request = req as { url?: string }
-        const response = res as { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void }
-        const id = request.url === undefined ? undefined : new URL(request.url, 'http://localhost').searchParams.get('id')
-        if (id === null || id === undefined) { response.writeHead(400, { 'Content-Type': 'application/json' }); response.end('{"error":"id is required"}'); return }
-        try {
-          const result = await provider.request('hub/load', { id })
-          response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(result))
-        } catch (error) {
-          response.writeHead(502, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
-        }
-      },
-    })
-    ctx.effect(() => sessionLoadDispose, 'hub-client.webServer.session-load')
-    const sessionHistoryDispose = webServer.register({
-      kind: 'exact',
-      path: '/api/hub/session/history',
-      handler: async (req: unknown, res: unknown) => {
-        const request = req as { url?: string }
-        const response = res as { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void }
-        const params = request.url === undefined ? undefined : new URL(request.url, 'http://localhost').searchParams
-        const id = params?.get('id')
-        if (id === null || id === undefined) { response.writeHead(400, { 'Content-Type': 'application/json' }); response.end('{"error":"id is required"}'); return }
-        try {
-          const result = await provider.request('hub/session/history', {
-            id,
-            ...(params?.get('beforeSeq') === null ? {} : { beforeSeq: Number(params?.get('beforeSeq')) }),
-            ...(params?.get('maxMessages') === null ? {} : { maxMessages: Number(params?.get('maxMessages')) }),
-          })
-          response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(result))
-        } catch (error) {
-          response.writeHead(502, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
-        }
-      },
-    })
-    ctx.effect(() => sessionHistoryDispose, 'hub-client.webServer.session-history')
-    const sessionModelsDispose = webServer.register({
-      kind: 'exact',
-      path: '/api/hub/session/models',
-      handler: async (req: unknown, res: unknown) => {
-        const request = req as { url?: string }
-        const response = res as { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void }
-        const id = request.url === undefined ? undefined : new URL(request.url, 'http://localhost').searchParams.get('id')
-        if (id === null || id === undefined) { response.writeHead(400, { 'Content-Type': 'application/json' }); response.end('{"error":"id is required"}'); return }
-        try {
-          const result = await provider.request('hub/session/models', { id })
-          response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(result))
-        } catch (error) {
-          response.writeHead(502, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
-        }
-      },
-    })
-    ctx.effect(() => sessionModelsDispose, 'hub-client.webServer.session-models')
-    const sessionSelectModelDispose = webServer.register({
-      kind: 'exact',
-      path: '/api/hub/session/select-model',
-      handler: async (req: unknown, res: unknown) => {
-        const request = req as { url?: string }
-        const response = res as { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void }
-        const params = request.url === undefined ? undefined : new URL(request.url, 'http://localhost').searchParams
-        const id = params?.get('id'); const providerName = params?.get('provider'); const model = params?.get('model'); const reasoningEffort = params?.get('reasoningEffort') ?? undefined
-        if (id === null || id === undefined || providerName === null || model === null) { response.writeHead(400, { 'Content-Type': 'application/json' }); response.end('{"error":"id, provider and model are required"}'); return }
-        try {
-          const result = await provider.request('hub/session/select-model', { id, provider: providerName, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) })
-          response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(result))
-        } catch (error) {
-          response.writeHead(502, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
-        }
-      },
-    })
-    ctx.effect(() => sessionSelectModelDispose, 'hub-client.webServer.session-select-model')
-    const sessionMutationRoutes = [
-      ['/api/hub/session/rename', 'hub/session/rename'],
-      ['/api/hub/session/update-queue', 'hub/session/update-queue'],
-      ['/api/hub/session/attachment', 'hub/session/attachment'],
-      ['/api/hub/session/fork', 'hub/session/fork'],
-    ] as const
-    for (const [path, method] of sessionMutationRoutes) {
-      const dispose = webServer.register({
-        kind: 'exact',
-        path,
-        handler: async (req: unknown, res: unknown) => {
-          const request = req as { url?: string }
-          const response = res as { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void }
-          const params = request.url === undefined ? undefined : new URL(request.url, 'http://localhost').searchParams
-          const id = params?.get('id')
-          if (id === null || id === undefined) { response.writeHead(400, { 'Content-Type': 'application/json' }); response.end('{"error":"id is required"}'); return }
-          const payload = method === 'hub/session/rename'
-            ? { id, title: params?.get('title') ?? '' }
-            : method === 'hub/session/update-queue'
-              ? { id, itemId: params?.get('itemId') ?? '', action: JSON.parse(params?.get('action') ?? 'null') }
-              : method === 'hub/session/attachment'
-                ? { id, attachmentId: params?.get('attachmentId') ?? '' }
-                : { id, ...(params?.get('atSeq') === null ? {} : { atSeq: Number(params?.get('atSeq')) }) }
-          try {
-            const result = await provider.request(method, payload)
-            response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(result))
-          } catch (error) {
-            response.writeHead(502, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
-          }
-        },
-      })
-      ctx.effect(() => dispose, `hub-client.webServer.${method}`)
-    }
-    const subagentRoutes = [
-      ['/api/hub/subagent/list', 'hub/subagent/list'],
-      ['/api/hub/subagent/history', 'hub/subagent/history'],
-      ['/api/hub/subagent/prompt', 'hub/subagent/prompt'],
-      ['/api/hub/subagent/interrupt', 'hub/subagent/interrupt'],
-    ] as const
-    for (const [path, method] of subagentRoutes) {
-      const dispose = webServer.register({
-        kind: 'exact', path,
-        handler: async (req: unknown, res: unknown) => {
-          const request = req as { url?: string }
-          const response = res as { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void }
-          const params = request.url === undefined ? undefined : new URL(request.url, 'http://localhost').searchParams
-          const parentSessionId = params?.get('parentSessionId')
-          const childSessionId = params?.get('childSessionId')
-          const mode = params?.get('mode')
-          if (parentSessionId === null || parentSessionId === undefined || (method !== 'hub/subagent/list' && (childSessionId === null || childSessionId === undefined || (mode !== 'one-shot' && mode !== 'continuable')))) {
-            response.writeHead(400, { 'Content-Type': 'application/json' }); response.end('{"error":"invalid subagent address"}'); return
-          }
-          const payload = method === 'hub/subagent/list'
-            ? { parentSessionId }
-            : { parentSessionId, childSessionId, mode, ...(method === 'hub/subagent/history' ? { beforeSeq: params?.get('beforeSeq') === null ? undefined : Number(params?.get('beforeSeq')), maxMessages: params?.get('maxMessages') === null ? undefined : Number(params?.get('maxMessages')) } : {}), ...(method === 'hub/subagent/prompt' ? { content: JSON.parse(params?.get('content') ?? '[]') } : {}) }
-          try {
-            const result = await provider.request(method, payload)
-            response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(result))
-          } catch (error) {
-            response.writeHead(502, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
-          }
-        },
-      })
-      ctx.effect(() => dispose, `hub-client.webServer.${method}`)
-    }
-    const agentMessageDispose = webServer.register({
-      kind: 'exact',
-      path: '/api/hub/session/message',
-      handler: async (req: unknown, res: unknown) => {
-        const request = req as { url?: string }
-        const response = res as { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void }
-        const params = request.url === undefined ? undefined : new URL(request.url, 'http://localhost').searchParams
-        const id = params?.get('id'); const text = params?.get('text'); const mode = params?.get('mode') === 'steer' ? 'steer' : 'queue'
-        if (id === null || id === undefined || text === null || text === undefined) { response.writeHead(400, { 'Content-Type': 'application/json' }); response.end('{"error":"id and text are required"}'); return }
-        try {
-          const result = await remoteAgent.sendText(id as import('@deepseek-ai/dsh-session').SessionId, text, mode)
-          response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ accepted: true, mode, result }))
-        } catch (error) {
-          response.writeHead(502, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
-        }
-      },
-    })
-    ctx.effect(() => agentMessageDispose, 'hub-client.webServer.session-message')
-    const agentCancelDispose = webServer.register({
-      kind: 'exact',
-      path: '/api/hub/session/cancel',
-      handler: async (req: unknown, res: unknown) => {
-        const request = req as { url?: string }
-        const response = res as { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void }
-        const id = request.url === undefined ? undefined : new URL(request.url, 'http://localhost').searchParams.get('id')
-        if (id === null || id === undefined) { response.writeHead(400, { 'Content-Type': 'application/json' }); response.end('{"error":"id is required"}'); return }
-        try {
-          await provider.request('hub/agent/cancel', { id })
-          response.writeHead(200, { 'Content-Type': 'application/json' }); response.end('{"accepted":true}')
-        } catch (error) {
-          response.writeHead(502, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
-        }
-      },
-    })
-    ctx.effect(() => agentCancelDispose, 'hub-client.webServer.session-cancel')
     const sessionStreamDispose = webServer.register({
       kind: 'exact',
       path: '/api/hub/session/stream',

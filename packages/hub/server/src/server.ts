@@ -196,6 +196,8 @@ export class HubServer {
         return await this.handleSessionFork(params as { id: SessionId; atSeq?: number })
       case 'hub/session/history':
         return await this.handleSessionHistory(params as { id: SessionId; beforeSeq?: number; maxMessages?: number })
+      case 'hub/session/prompt':
+        return await this.handleSessionPrompt(params as { id: SessionId; content: unknown[]; mode: 'queue' | 'steer'; clientTimeZone?: string })
       case 'hub/subagent/list':
         return await this.handleSubagent('list', params)
       case 'hub/subagent/history':
@@ -500,6 +502,27 @@ export class HubServer {
     const result = response.result as { ok?: boolean; value?: unknown; error?: unknown }
     if (result.ok !== true) throw new Error(typeof result.error === 'string' ? result.error : `remote session history failed: ${JSON.stringify(result.error)}`)
     return result.value
+  }
+
+  private async handleSessionPrompt(params: { id: SessionId; content: unknown[]; mode: 'queue' | 'steer'; clientTimeZone?: string }): Promise<{ accepted: true }> {
+    const api = this.ctx.get('apiProxy') as {
+      sessions?: {
+        prompt: (request: { rpcId: string; payload: { sessionId: SessionId; content: unknown[]; mode: 'queue' | 'steer'; clientTimeZone?: string } }) => Promise<{ result: { ok: true; value: unknown } | { ok: false; error: unknown } }>
+      }
+    } | undefined
+    const prompt = api?.sessions?.prompt
+    if (prompt === undefined) throw new Error('remote session prompt API is unavailable')
+    const response = await prompt({
+      rpcId: `hub-session-prompt-${randomUUID()}`,
+      payload: {
+        sessionId: params.id,
+        content: params.content,
+        mode: params.mode,
+        ...(params.clientTimeZone === undefined ? {} : { clientTimeZone: params.clientTimeZone }),
+      },
+    })
+    if (!response.result.ok) throw new Error(`remote session prompt failed: ${JSON.stringify(response.result.error)}`)
+    return { accepted: true }
   }
 
   private async handleCreate(
