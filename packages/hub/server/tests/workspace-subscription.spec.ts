@@ -23,9 +23,9 @@ describe('Hub workspace event filtering', () => {
   })
 
   it('filters workspace lifecycle frames by selected workspace', () => {
-    expect(isHostFrameVisibleToWorkspaces({ type: 'host/workspace-changed', workspace: { workspaceId: 'workspace-a' } } as never, selected, workspaces)).toBe(true)
-    expect(isHostFrameVisibleToWorkspaces({ type: 'host/workspace-removed', workspaceId: 'workspace-b' } as never, selected, workspaces)).toBe(false)
-    expect(isHostFrameVisibleToWorkspaces({ type: 'host/workspace-order-changed', workspaceIds: ['workspace-b', 'workspace-a'] }, selected, workspaces)).toBe(true)
+    expect(isHostFrameVisibleToWorkspaces({ type: 'host/workspace-changed', workspace: { workspaceId: 'workspace-a' as WorkspaceId } } as never, selected, workspaces)).toBe(true)
+    expect(isHostFrameVisibleToWorkspaces({ type: 'host/workspace-removed', workspaceId: 'workspace-b' as WorkspaceId } as never, selected, workspaces)).toBe(false)
+    expect(isHostFrameVisibleToWorkspaces({ type: 'host/workspace-order-changed', workspaceIds: ['workspace-b', 'workspace-a'] as WorkspaceId[] }, selected, workspaces)).toBe(true)
   })
 
   it('keeps selected-project control frames and filters unrelated archive snapshots', () => {
