@@ -4,6 +4,8 @@ English | [中文](README.zh.md)
 
 The browser settings section for the remote Hub connection. It registers status and Remote Chat entries through the client slot system. Remote Chat connects to the configured Hub, lists or creates sessions, streams events, sends prompts, and cancels active turns. The feature is plugin-owned; it does not modify Harness core or the local composer.
 
+The multi-endpoint settings and icon placement contract is documented in [`docs/hub-endpoints.md`](../../../docs/hub-endpoints.md). The small computer icon belongs to the settings-page remote connection entry; the home page project list does not use it.
+
 ## Composition
 
 Install this package as part of a Web profile that also provides [`dsh-client-ui-settings`](../ui-settings/README.md), [`dsh-client-runtime`](../runtime/README.md), the locale and slot services, and [`dsh-hub-protocol`](../../hub/protocol/README.md). The web bundle declares this package in its `dsh.client` composition, so a profile that includes the package receives the section without application code importing the component.

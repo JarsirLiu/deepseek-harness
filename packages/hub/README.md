@@ -4,6 +4,8 @@ English | [中文](README.zh.md)
 
 The remote Hub capability is split into independently publishable packages. Install only the roles required by a deployment and compose them through the Harness profile.
 
+The multi-endpoint topology, settings ownership, and settings-page interaction are defined in [`docs/hub-endpoints.md`](../../docs/hub-endpoints.md).
+
 ## Packages
 
 - [`protocol/`](protocol/): shared WebSocket JSON-RPC types and transport helpers; library only.

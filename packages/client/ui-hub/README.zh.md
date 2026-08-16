@@ -4,6 +4,8 @@
 
 远程 Hub 连接的浏览器设置区。它通过客户端 slot 系统注册连接状态和“远程对话”条目。远程对话会连接配置的 Hub，列出或创建会话，接收实时事件，发送消息并取消正在运行的回合。全部能力由插件提供，不修改 Harness 核心或本地 composer。
 
+多端点设置和图标位置约定定义在 [`docs/hub-endpoints.md`](../../../docs/hub-endpoints.md)。小电脑图标只属于设置页的远程连接入口，首页项目列表不使用该图标。
+
 ## 组合方式
 
 将本包安装到同时提供 [`dsh-client-ui-settings`](../ui-settings/README.md)、[`dsh-client-runtime`](../runtime/README.md)、locale 与 slot 服务以及 [`dsh-hub-protocol`](../../hub/protocol/README.md) 的 Web profile 中。Web bundle 在 `dsh.client` 组合中声明本包，因此 profile 包含它后会获得该设置区，应用代码不需要直接导入组件。

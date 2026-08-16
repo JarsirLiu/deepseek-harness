@@ -4,6 +4,8 @@
 
 远程 Hub 能力拆分为可独立发布的包。部署只安装所需角色，再通过 Harness profile 组合它们。
 
+多端点拓扑、设置归属和设置页交互定义在 [`docs/hub-endpoints.md`](../../docs/hub-endpoints.md)。
+
 ## 包
 
 - [`protocol/`](protocol/)：共享 WebSocket JSON-RPC 类型与传输辅助代码，仅作为库使用。
