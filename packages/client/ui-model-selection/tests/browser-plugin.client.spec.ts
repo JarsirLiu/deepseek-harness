@@ -107,8 +107,13 @@ async function bench() {
   ctx.provide('locale', new LocaleRuntime(ctx))
   const scopes = new Map<SessionId, Context>()
   const addressed = new Set<SessionId>()
+  const sessionFace = {
+    models: () => ctx.get('connection').api.sessions.models({ sessionId: sid('s1') }),
+    selectModel: (selection: ModelSelection) => ctx.get('connection').api.sessions.selectModel({ sessionId: sid('s1'), ...selection }),
+  }
   ctx.provide('sessions', {
     scope: (id: SessionId) => scopes.get(id),
+    sessionOf: (_ctx: Context) => sessionFace,
     subagentAddress: (id: SessionId) => addressed.has(id)
       ? { parentSessionId: sid('parent'), childSessionId: id, mode: 'continuable' as const }
       : undefined,

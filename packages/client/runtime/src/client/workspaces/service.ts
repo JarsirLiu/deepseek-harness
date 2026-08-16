@@ -5,6 +5,7 @@ import type {
   DirectoryListing, IApiClient, RpcError,
   SessionId, WorkspaceId, WorkspaceView,
 } from '@deepseek-ai/dsh-api-remotes/client'
+import { qualifiedSessionId, REMOTE_WORKSPACE_SOURCE, type RemoteWorkspace, type RemoteWorkspaceSource } from '@deepseek-ai/dsh-hub-web-adapter'
 import type { SnapshotStore } from '../contract/store.ts'
 import { createSnapshotStore } from '../contract/store.ts'
 import type { SessionsPort, SessionsPortList } from '../contract/sessions-port.ts'
@@ -55,6 +56,12 @@ export class WorkspaceRuntime implements IWorkspaces {
   private readonly manager: WorkspaceManager
   /** In-flight blank-session creates keyed by workspace (connectWorkspace coalescing). */
   private readonly connecting = new Map<WorkspaceId, Promise<SessionId>>()
+  /** Selected remote workspaces projected by the Hub adapter. */
+  private remoteItems: readonly WorkspaceView[] = []
+  private remoteState: WorkspaceListState['state'] = 'idle'
+  private remoteError: RpcError | null = null
+  private remoteReady = false
+  private readonly remoteById = new Map<WorkspaceId, RemoteWorkspace>()
   /** Guards the runtime-owned one-shot initial-selection subscription. */
   private initialSelectionStarted = false
 
@@ -63,7 +70,8 @@ export class WorkspaceRuntime implements IWorkspaces {
    * @param api - shared wire client.
    * @param sessions - cross-domain sessions face used for recency and blank-session reuse.
    */
-  constructor(ctx: Context, private readonly api: IApiClient, private readonly sessions: SessionsPort) {
+  constructor(private readonly ctx: Context, private readonly api: IApiClient, private readonly sessions: SessionsPort) {
+    this.remoteReady = this.getRemoteSource() === undefined
     this.manager = new WorkspaceManager(api)
     this.list = createSnapshotStore<WorkspaceListState>({
       items: [], archivedSessionIds: [], state: 'idle', phase: 'pending', error: null,
@@ -71,6 +79,13 @@ export class WorkspaceRuntime implements IWorkspaces {
     })
     this.manager.subscribe(() => { this.project() })
     this.sessions.list.subscribe(() => { this.project() })
+    ctx.effect(() => {
+      if (typeof globalThis.addEventListener !== 'function' || typeof globalThis.removeEventListener !== 'function') return () => {}
+      const refresh = (): void => { void this.refreshRemote() }
+      globalThis.addEventListener('dsh:remote-workspaces-changed', refresh)
+      return () => globalThis.removeEventListener('dsh:remote-workspaces-changed', refresh)
+    }, 'workspaces: refresh selected remote workspaces')
+    if (this.getRemoteSource() !== undefined) void this.refreshRemote()
     ctx.reflect.provide('workspaces', this, undefined)
   }
 
@@ -94,6 +109,17 @@ export class WorkspaceRuntime implements IWorkspaces {
     // would miss the reuse scan and mint another hidden blank session.
     const inflight = this.connecting.get(workspaceId)
     if (inflight !== undefined) return inflight
+    const remote = this.remoteById.get(workspaceId)
+    if (remote !== undefined) {
+      const remoteSource = this.getRemoteSource()
+      if (remoteSource === undefined) throw new Error(`remote workspace source unavailable: ${String(workspaceId)}`)
+      const attempt = remoteSource.createSession(remote).then(async (sessionId) => {
+        await this.sessions.refreshRemoteSessions?.()
+        return qualifiedSessionId({ endpointId: remote.endpointId, sessionId })
+      }).finally(() => { this.connecting.delete(workspaceId) })
+      this.connecting.set(workspaceId, attempt)
+      return attempt
+    }
     // Reuse requires workspace membership (id in sessionIds AND same
     // canonical cwd — the host's own membership rule), never cwd alone:
     // a cwd match can belong to no account (sessions the CLI/TUI birthed at
@@ -256,6 +282,7 @@ export class WorkspaceRuntime implements IWorkspaces {
    * @returns the renamed Workspace view.
    */
   async rename(workspaceId: WorkspaceId, title: string): Promise<WorkspaceView> {
+    this.assertLocalWorkspace(workspaceId, 'rename')
     const result = await this.manager.rename(workspaceId, title)
     if (!result.ok) throw new Error(`workspace rename failed: ${result.error.code}: ${result.error.message}`)
     return result.value.workspace
@@ -267,6 +294,7 @@ export class WorkspaceRuntime implements IWorkspaces {
    * @param workspaceId - target workspace.
    */
   async delete(workspaceId: WorkspaceId): Promise<void> {
+    this.assertLocalWorkspace(workspaceId, 'delete')
     const result = await this.manager.delete(workspaceId)
     if (!result.ok) throw new Error(`workspace delete failed: ${result.error.code}: ${result.error.message}`)
   }
@@ -277,6 +305,8 @@ export class WorkspaceRuntime implements IWorkspaces {
    * @param beforeWorkspaceId - Anchor workspace; omitted appends.
    */
   async insertBefore(workspaceId: WorkspaceId, beforeWorkspaceId?: WorkspaceId): Promise<void> {
+    this.assertLocalWorkspace(workspaceId, 'reorder')
+    if (beforeWorkspaceId !== undefined) this.assertLocalWorkspace(beforeWorkspaceId, 'reorder')
     const result = await this.manager.insertBefore(workspaceId, beforeWorkspaceId)
     if (!result.ok) throw new Error(`workspace reorder failed: ${result.error.code}: ${result.error.message}`)
   }
@@ -304,6 +334,7 @@ export class WorkspaceRuntime implements IWorkspaces {
     sessionId: SessionId,
     beforeSessionId?: SessionId,
   ): Promise<WorkspaceView> {
+    this.assertLocalWorkspace(workspaceId, 'move session')
     const result = await this.manager.insertSessionBefore(workspaceId, sessionId, beforeSessionId)
     if (!result.ok) throw new Error(`workspace move failed: ${result.error.code}: ${result.error.message}`)
     return result.value.workspace
@@ -328,12 +359,54 @@ export class WorkspaceRuntime implements IWorkspaces {
   /** Rebuild the Workspace baseline after connection. */
   handleConnected(): void {
     this.manager.handleConnected()
+    void this.refreshRemote()
+  }
+
+  /** Refresh the selected remote workspace projection through the Hub adapter. */
+  async refreshRemote(): Promise<void> {
+    const remoteSource = this.getRemoteSource()
+    if (remoteSource === undefined) {
+      this.remoteReady = true
+      this.project()
+      return
+    }
+    this.remoteState = 'loading'
+    this.remoteError = null
+    this.project()
+    try {
+      const remote = await remoteSource.listSelected()
+      this.remoteById.clear()
+      for (const item of remote) this.remoteById.set(remoteWorkspaceId(item), item)
+      this.remoteItems = remote.map(toRemoteWorkspaceView)
+      // Workspace selection and session summaries share one remote snapshot.
+      // Refresh both when settings changes after the initial connection.
+      await this.sessions.refreshRemoteSessions?.()
+      this.remoteState = 'idle'
+      this.remoteReady = true
+    } catch (error) {
+      this.remoteState = 'error'
+      this.remoteError = { code: 'internal', message: error instanceof Error ? error.message : String(error), details: {} }
+    }
+    this.project()
+  }
+
+  /** Reject local Host mutations for workspaces owned by a Hub endpoint. */
+  private assertLocalWorkspace(workspaceId: WorkspaceId, operation: string): void {
+    if (isRemoteWorkspaceId(workspaceId)) {
+      throw new Error(`remote workspace ${String(workspaceId)} does not support local ${operation}`)
+    }
+  }
+
+  /** Resolve the optional Hub source after sibling plugins have loaded. */
+  private getRemoteSource(): RemoteWorkspaceSource | undefined {
+    return this.ctx.get(REMOTE_WORKSPACE_SOURCE) as RemoteWorkspaceSource | undefined
   }
 
   private project(): void {
     const workspace = this.manager.getSnapshot()
     const sessions = this.sessions.list.getSnapshot()
-    const baselinesReady = workspace.phase === 'ready' && sessions.phase === 'ready'
+    const items = [...workspace.items, ...this.remoteItems]
+    const baselinesReady = workspace.phase === 'ready' && sessions.phase === 'ready' && this.remoteReady
     // An archived current selection clears into the New Session view state —
     // a hidden row must not stay open behind the list. Sweeping here covers
     // every install path with one rule: the local unary echo, another tab's
@@ -343,15 +416,37 @@ export class WorkspaceRuntime implements IWorkspaces {
       this.sessions.clear()
     }
     this.list.set({
-      items: workspace.items,
+      items,
       archivedSessionIds: workspace.archivedSessionIds,
-      state: workspace.state,
-      phase: workspace.phase,
-      error: workspace.error,
+      state: workspace.state === 'error' || this.remoteState === 'error' ? 'error' : workspace.state === 'loading' || this.remoteState === 'loading' ? 'loading' : 'idle',
+      phase: baselinesReady ? 'ready' : 'pending',
+      error: workspace.error ?? this.remoteError,
       baselinesReady,
-      recentWorkspaceId: baselinesReady ? recentWorkspace(workspace.items, sessions.byId) : undefined,
+      recentWorkspaceId: baselinesReady ? recentWorkspace(items, sessions.byId) : undefined,
     })
   }
+}
+
+/** Convert a remote workspace to the local list projection without exposing its path to Host APIs. */
+function toRemoteWorkspaceView(workspace: RemoteWorkspace): WorkspaceView {
+  return {
+    workspaceId: `remote:${workspace.endpointId.slice('remote:'.length)}|${workspace.workspaceId}` as WorkspaceId,
+    path: workspace.path,
+    title: workspace.title,
+    sessionIds: workspace.sessions.map(session => qualifiedSessionId({ endpointId: session.endpointId, sessionId: session.sessionId })),
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+  }
+}
+
+/** Encode a remote workspace identity without allowing the Host to resolve it locally. */
+function remoteWorkspaceId(workspace: RemoteWorkspace): WorkspaceId {
+  return `remote:${workspace.endpointId.slice('remote:'.length)}|${workspace.workspaceId}` as WorkspaceId
+}
+
+/** Remote workspace IDs are opaque to the Host and carry their endpoint prefix. */
+function isRemoteWorkspaceId(workspaceId: WorkspaceId): boolean {
+  return String(workspaceId).startsWith('remote:')
 }
 
 /** Stable tie-breaking follows Host Workspace order. */

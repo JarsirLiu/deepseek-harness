@@ -37,6 +37,7 @@ import type { SessionListPhase, SessionSearchResultItem, SubagentCatalogSnapshot
 import type { PendingInteractionStatus } from './pending.ts'
 import { SessionProvideChannel } from './provide.ts'
 import type { Session } from './session.ts'
+import { REMOTE_SESSION_REGISTRY, REMOTE_WORKSPACE_SOURCE, type RemoteSessionTransportRegistry, type RemoteWorkspaceSource } from '@deepseek-ai/dsh-hub-web-adapter'
 
 /** Session list row projected from the host list RPC plus live stream increments. */
 export interface SessionSummary {
@@ -298,6 +299,7 @@ export class SessionRuntime implements ISessions {
       restored.sessionId,
       restored.subagentAddress,
       conversation,
+      undefined,
     )
     this.list = createSnapshotStore<SessionListState>({
       ids: [], byId: {}, current: undefined, phase: 'pending',
@@ -423,12 +425,6 @@ export class SessionRuntime implements ISessions {
     this.manager.clearSelection()
   }
 
-  /** Add a remote Hub session to the ordinary session list and select it. */
-  adoptRemote(summary: import('@deepseek-ai/dsh-api-remotes/client').SessionSummary): void {
-    this.manager.adoptRemote(summary)
-    this.manager.select(summary.sessionId)
-  }
-
   /**
    * Refresh the real Session baseline, reusing an in-flight pull.
    * @returns completion of the current or newly started baseline pull.
@@ -470,6 +466,19 @@ export class SessionRuntime implements ISessions {
   /** Rebuild the Session baseline and every opened window after connection. */
   handleConnected(): void {
     this.manager.handleConnected()
+    void this.refreshRemoteSessions()
+  }
+
+  /** Refresh selected remote session summaries and install their endpoint transports. */
+  async refreshRemoteSessions(): Promise<void> {
+    const source = this.rootCtx.get(REMOTE_WORKSPACE_SOURCE) as RemoteWorkspaceSource | undefined
+    if (source === undefined) return
+    this.manager.setRemoteRegistry(
+      this.rootCtx.get(REMOTE_SESSION_REGISTRY) as RemoteSessionTransportRegistry | undefined,
+    )
+    const workspaces = await source.listSelected()
+    this.manager.installRemoteWorkspaces(workspaces)
+    this.projectList()
   }
 
   /** Drop generation-scoped live interaction state the moment a connection generation dies. */

@@ -22,6 +22,9 @@ import { Notifier } from './notifier.ts'
 import { ProjectionValueStore } from './projection-store.ts'
 import { Session } from './session.ts'
 import type { SessionRemotes } from './remotes.ts'
+import { remoteSessionTransport, type SessionTransport } from './remotes.ts'
+import type { RemoteSessionTransportRegistry, RemoteWorkspace } from '@deepseek-ai/dsh-hub-web-adapter'
+import { parseQualifiedSessionId, qualifiedSessionId } from '@deepseek-ai/dsh-hub-web-adapter'
 
 /**
  * List arrival lifecycle, orthogonal to the pull-activity `state` axis:
@@ -105,6 +108,8 @@ function questionInteractionStatus(
 /** Instance cluster + frame entry + the session list. */
 export class SessionManager {
   private readonly sessions = new Map<SessionId, Session>()
+  private readonly remoteSessions = new Map<SessionId, SessionTransport>()
+  private readonly remoteSubscriptions = new Map<SessionId, () => void>()
   /** Pre-instantiation buffer for answerable requests and the queued-turn snapshot, which history
    *  cannot reconstruct on open. Live requests remain until resolution; queue and replay duplicates
    *  compact by identity. Instantiation replays and clears it, while removal drops it. */
@@ -170,10 +175,28 @@ export class SessionManager {
     restoredSelection?: SessionId,
     restoredAddress?: SubagentAddress,
     private readonly conversation?: ConversationRuntime,
+    private remoteRegistry?: RemoteSessionTransportRegistry,
   ) {
     this.selected = restoredSelection
     if (restoredAddress !== undefined) this.addresses.set(restoredAddress.childSessionId, restoredAddress)
     this.listSnapshotCache = this.buildListSnapshot()
+  }
+
+  /** Update the optional endpoint registry when the Hub plugin becomes available. */
+  setRemoteRegistry(registry: RemoteSessionTransportRegistry | undefined): void {
+    this.remoteRegistry = registry
+    if (registry === undefined) return
+    // A scope can be created while the endpoint registry is still loading.
+    // Rebind resident qualified sessions as soon as the registry becomes
+    // available so they cannot retain the default local transport.
+    for (const sessionId of this.sessions.keys()) {
+      const ref = parseQualifiedSessionId(sessionId)
+      if (ref === undefined) continue
+      const transport = registry.resolve(ref)
+      const sessionTransport = remoteSessionTransport(transport, ref)
+      this.remoteSessions.set(sessionId, sessionTransport)
+      this.sessions.get(sessionId)?.installTransport(sessionTransport)
+    }
   }
 
   // ---- Selection ----
@@ -201,11 +224,6 @@ export class SessionManager {
     this.notifier.notifyNow()
   }
 
-  /** Add a remote Hub session to the ordinary navigation list. */
-  adoptRemote(summary: SessionSummary): void {
-    this.recordMutation({ kind: 'upsert', summary })
-  }
-
   /**
    * Select a healthy child through its durable direct-parent address.
    * @param address - catalog-derived parent and child ids.
@@ -215,6 +233,15 @@ export class SessionManager {
     const entry = catalog?.entries.find(candidate => candidate.id === address.childSessionId)
     if (entry === undefined || entry.kind !== 'child' || entry.mode !== address.mode) {
       throw new Error(`sessions.selectSubagent: ${address.childSessionId} is not a healthy catalog child`)
+    }
+    const parentRef = parseQualifiedSessionId(address.parentSessionId)
+    if (parentRef !== undefined) {
+      const transport = this.remoteRegistry?.resolve(parentRef)
+      if (transport === undefined) throw new Error(`remote endpoint unavailable: ${parentRef.endpointId}`)
+      this.remoteSessions.set(address.childSessionId, remoteSessionTransport(transport, {
+        endpointId: parentRef.endpointId,
+        sessionId: address.childSessionId,
+      }))
     }
     this.addresses.set(address.childSessionId, address)
     this.sessions.get(address.childSessionId)?.configureSubagent(address, catalog?.parentAvailable ?? false)
@@ -312,7 +339,16 @@ export class SessionManager {
 
   private createSession(sessionId: SessionId): Session {
     const address = this.addresses.get(sessionId)
+    let remoteTransport = this.remoteSessions.get(sessionId)
+    const ref = parseQualifiedSessionId(sessionId)
+    if (remoteTransport === undefined && ref !== undefined) {
+      const transport = this.remoteRegistry?.resolve(ref)
+      if (transport === undefined) throw new Error(`remote endpoint unavailable: ${ref.endpointId}`)
+      remoteTransport = remoteSessionTransport(transport, ref)
+      this.remoteSessions.set(sessionId, remoteTransport)
+    }
     return new Session(sessionId, this.api, this.remote, {
+      ...(remoteTransport === undefined ? {} : { transport: remoteTransport }),
       ...(address === undefined ? {} : {
         address,
         parentAvailable: this.catalogs.get(address.parentSessionId)?.parentAvailable ?? false,
@@ -325,6 +361,53 @@ export class SessionManager {
       projections: this.projectionStore(sessionId),
       ...this.conversation === undefined ? {} : { conversation: this.conversation },
     })
+  }
+
+  /** Install the selected remote workspace session summaries and transports. */
+  installRemoteWorkspaces(workspaces: readonly RemoteWorkspace[]): void {
+    const next = new Set<SessionId>()
+    for (const workspace of workspaces) {
+      for (const remote of workspace.sessions) {
+        const ref = { endpointId: remote.endpointId, sessionId: remote.sessionId } as const
+        const id = qualifiedSessionId(ref)
+        const transport = this.remoteRegistry?.resolve(ref)
+        if (transport === undefined) continue
+        next.add(id)
+        const sessionTransport = remoteSessionTransport(transport, ref)
+        this.remoteSessions.set(id, sessionTransport)
+        this.sessions.get(id)?.installTransport(sessionTransport)
+        this.remoteSubscriptions.get(id)?.()
+        this.remoteSubscriptions.set(id, transport.subscribe(remote.sessionId, (frame) => {
+          if (!('sessionId' in frame)) return
+          const session = this.get(id)
+          session.handleMuxEnvelope('remote-hub' as never, { ...frame, sessionId: id })
+        }))
+        this.recordMutation({ kind: 'upsert', summary: {
+          sessionId: id,
+          updatedAt: remote.updatedAt,
+          running: remote.running,
+          blank: remote.blank,
+          ...(remote.cwd === undefined ? {} : { cwd: remote.cwd }),
+          ...(remote.title === undefined ? {} : { title: remote.title }),
+          ...(remote.agentPreset === undefined ? {} : { agentPreset: remote.agentPreset }),
+          ...(remote.parentSessionId === undefined ? {} : {
+            parentSessionId: qualifiedSessionId({
+              endpointId: remote.endpointId,
+              sessionId: remote.parentSessionId,
+            }),
+          }),
+          ...(remote.origin === undefined ? {} : { origin: remote.origin }),
+        } })
+      }
+    }
+    for (const id of this.remoteSessions.keys()) {
+      if (next.has(id)) continue
+      this.remoteSessions.delete(id)
+      this.remoteSubscriptions.get(id)?.()
+      this.remoteSubscriptions.delete(id)
+      this.recordMutation({ kind: 'remove', sessionId: id })
+      this.sessions.delete(id)
+    }
   }
 
   /** Rebuild every resident Session after one coalesced registry transaction. */
@@ -364,13 +447,22 @@ export class SessionManager {
     this.notifier.markDirty()
     const operation = (async () => {
       try {
-        const { result } = await this.api.subagents.list({ parentSessionId })
+        const remoteParent = parseQualifiedSessionId(parentSessionId)
+        const remoteTransport = remoteParent === undefined ? undefined : this.remoteRegistry?.resolve(remoteParent)
+        const result = remoteTransport === undefined
+          ? (await this.api.subagents.list({ parentSessionId })).result
+          : await remoteTransport.subagentList(remoteParent.sessionId)
         if (result.ok) {
           const parentAvailable = this.catalogInflight.get(parentSessionId)?.parentAvailableOverride
             ?? result.value.parentAvailable
           this.catalogs.set(parentSessionId, {
             ...result.value,
-            entries: this.withCatalogMutations(result.value.entries, expandableRows, activityRows),
+            entries: this.withCatalogMutations(remoteParent === undefined
+              ? result.value.entries
+              : result.value.entries.map(entry => ({
+                ...entry,
+                id: qualifiedSessionId({ endpointId: remoteParent.endpointId, sessionId: entry.id }),
+              })), expandableRows, activityRows),
             parentAvailable,
             state: 'ready',
             error: null,

@@ -18,6 +18,7 @@ export const inject = ['sessions']
 
 /** Cordis schema for the hub server configuration. */
 export const Config: Schema<HubServerConfig> = Schema.object({
+  endpointId: Schema.string().description('Stable endpoint identity') as Schema<`remote:${string}`>,
   port: Schema.number().default(8765).description('TCP port to listen on'),
   host: Schema.string().default('127.0.0.1').description('Host to bind to'),
   authTokens: Schema.array(Schema.string()).default([]).description('Optional authentication tokens'),

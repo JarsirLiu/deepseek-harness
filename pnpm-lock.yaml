@@ -1598,6 +1598,9 @@ importers:
       '@deepseek-ai/dsh-host-apiproxy':
         specifier: workspace:^
         version: link:../../host/apiproxy
+      '@deepseek-ai/dsh-hub-web-adapter':
+        specifier: workspace:^
+        version: link:../../hub/web-adapter
       '@deepseek-ai/dsh-llm':
         specifier: workspace:^
         version: link:../../llm/llm
@@ -2070,6 +2073,9 @@ importers:
       '@deepseek-ai/dsh-hub-protocol':
         specifier: workspace:^
         version: link:../../hub/protocol
+      '@deepseek-ai/dsh-hub-web-adapter':
+        specifier: workspace:^
+        version: link:../../hub/web-adapter
       '@deepseek-ai/dsh-invariants':
         specifier: workspace:^
         version: link:../../runtime-diagnostics/invariants
@@ -5082,6 +5088,15 @@ importers:
       '@types/ws':
         specifier: ^8.5.0
         version: 8.18.1
+
+  packages/hub/web-adapter:
+    dependencies:
+      '@deepseek-ai/dsh-api-remotes':
+        specifier: workspace:^
+        version: link:../../api/remotes
+      '@deepseek-ai/dsh-attachment':
+        specifier: workspace:^
+        version: link:../../attachment/attachment
 
   packages/identity/anonymous-user-id:
     devDependencies:

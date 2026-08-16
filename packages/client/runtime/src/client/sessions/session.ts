@@ -4,9 +4,10 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { AttachmentIdType, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import type {
-  HistoryEntry, IApiClient, MessageId, MuxFrame, PromptContentPart, QueueAction, RpcError,
+  HistoryEntry, IApiClient, MessageId, ModelSelection, MuxFrame, PromptContentPart, QueueAction, RpcError,
   RpcId, RpcResponse, RpcResult, SessionId, SubagentAddress, ToolEventView,
 } from '@deepseek-ai/dsh-api-remotes/client'
+import type { SessionModels } from '@deepseek-ai/dsh-api-remotes/client'
 // Value import from the inline-safe wire layer (not the connection plugin):
 // plugin-to-plugin value imports are a bundle purity error.
 import { transportError } from '@deepseek-ai/dsh-host-apiproxy/api'
@@ -22,7 +23,7 @@ import type { PendingInteraction } from './pending.ts'
 import { PendingWait } from './pending.ts'
 import { Notifier } from './notifier.ts'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
-import { REMOTE_SESSION_ROUTER, type RemoteSessionRouter, type SessionRemotes } from './remotes.ts'
+import { localSessionTransport, type SessionRemotes, type SessionTransport } from './remotes.ts'
 import { ProjectionValueStore } from './projection-store.ts'
 import type { ProjectionsBaseline } from './projection-store.ts'
 import { resolvedClientTimeZone } from '../time-zone.ts'
@@ -54,6 +55,8 @@ export interface SessionOptions {
   projections?: ProjectionValueStore
   /** Runtime registries used by this Session-owned Conversation assembler. */
   conversation?: ConversationRuntime
+  /** Endpoint-resolved transport; omitted sessions use the local Host API. */
+  transport?: SessionTransport
 }
 
 /**
@@ -107,7 +110,6 @@ export class Session implements SessionFace {
   private stitching = false
   /** subscribed.lastSeq baseline (gap detection; null when no subscribed frame arrived — degrade to the liveBuffer dedup path). */
   private subscribedLastSeq: number | null = null
-  private remoteSubscription: (() => void) | null = null
 
   /**
    * Per-session projection value store (push model; see the session-projection
@@ -133,6 +135,7 @@ export class Session implements SessionFace {
    * dispatch-dependent behavior rather than fail.
    */
   private actx: Context | undefined
+  private transport: SessionTransport
 
   /**
    * @param sessionId - Host session identity (client sessions are always Host-born).
@@ -149,6 +152,7 @@ export class Session implements SessionFace {
     this.projections = options.projections ?? new ProjectionValueStore()
     this.address = options.address
     this.parentAvailable = options.parentAvailable ?? false
+    this.transport = options.transport ?? localSessionTransport(api, sessionId)
     this.conversation = options.conversation === undefined
       ? new ConversationNodeAssembler(
         { entries: () => [], fallbackEntry: () => undefined },
@@ -160,6 +164,21 @@ export class Session implements SessionFace {
       this.snapshotCache = this.buildSnapshot()
     })
     this.snapshotCache = this.buildSnapshot()
+  }
+
+  /** Load models through the transport selected for this session. */
+  models(): Promise<RpcResponse<SessionModels>> {
+    return this.transport.models()
+  }
+
+  /** Select a model through the transport selected for this session. */
+  selectModel(selection: ModelSelection): Promise<RpcResponse<{ selected: ModelSelection }>> {
+    return this.transport.selectModel(selection)
+  }
+
+  /** Replace the endpoint transport when workspace discovery finishes. */
+  installTransport(transport: SessionTransport): void {
+    this.transport = transport
   }
 
   /**
@@ -199,16 +218,8 @@ export class Session implements SessionFace {
     this.notifier.markDirty()
     let result: RpcResult<{ accepted: true }>
     try {
-      const router = this.remoteRouter()
-      if (router !== undefined && router.owns(this.sessionId)) {
-        result = await router.prompt(this.sessionId, content, mode)
-      } else if (this.address === undefined) {
-        result = (await this.api.sessions.prompt({
-          sessionId: this.sessionId,
-          mode,
-          content,
-          clientTimeZone: resolvedClientTimeZone(),
-        })).result
+      if (this.address === undefined) {
+        result = (await this.transport.prompt(content, mode, resolvedClientTimeZone())).result
       } else if (this.address.mode === 'one-shot') {
         result = {
           ok: false,
@@ -229,13 +240,13 @@ export class Session implements SessionFace {
             },
           }
         } else {
-          const routed = (await this.api.subagents.prompt({
-            ...this.address,
-            content: content.flatMap(part => part.type === 'text'
+          const routed = (await this.transport.subagentPrompt(
+            this.address,
+            content.flatMap(part => part.type === 'text'
               ? [{ type: 'text' as const, text: part.text }]
               : []),
-            clientTimeZone: resolvedClientTimeZone(),
-          })).result
+            resolvedClientTimeZone(),
+          )).result
           result = routed.ok ? { ok: true, value: { accepted: true } } : routed
         }
       }
@@ -272,10 +283,7 @@ export class Session implements SessionFace {
     attachmentId: AttachmentIdType,
   ): Promise<RpcResult<{ attachment: ImageAttachmentRef; data: Uint8Array }>> {
     try {
-      const result = (await this.api.sessions.attachment({
-        sessionId: this.sessionId,
-        attachmentId,
-      })).result
+      const result = (await this.transport.readAttachment(attachmentId)).result
       if (!result.ok) return result
       const binary = atob(result.value.data)
       const data = Uint8Array.from(binary, char => char.charCodeAt(0))
@@ -288,7 +296,7 @@ export class Session implements SessionFace {
   /** Apply one operation to a still-pending queue occurrence. */
   async updateQueue(itemId: MessageId, action: QueueAction): Promise<RpcResult<{ accepted: true }>> {
     try {
-      return (await this.api.sessions.updateQueue({ sessionId: this.sessionId, itemId, action })).result
+      return (await this.transport.updateQueue(itemId, action)).result
     } catch (error) {
       return transportError(error)
     }
@@ -320,12 +328,9 @@ export class Session implements SessionFace {
     }
     let result: RpcResult<{ accepted: true }>
     try {
-      const router = this.remoteRouter()
-      result = router !== undefined && router.owns(this.sessionId)
-        ? await router.cancel(this.sessionId)
-        : address !== undefined
-          ? (await this.api.subagents.interrupt(address)).result
-          : (await this.api.sessions.cancel({ sessionId: this.sessionId })).result
+      result = address !== undefined
+        ? (await this.transport.subagentInterrupt(address)).result
+        : (await this.transport.cancel()).result
     } catch (error) {
       result = transportError(error)
     }
@@ -347,7 +352,7 @@ export class Session implements SessionFace {
    */
   async rename(title: string): Promise<RpcResult<{ title: string; seq: number }>> {
     try {
-      const { result } = await this.api.sessions.rename({ sessionId: this.sessionId, title })
+      const { result } = await this.transport.rename(title)
       if (result.ok) this.projections.apply('title', result.value.title, result.value.seq)
       return result
     } catch (error) {
@@ -623,12 +628,6 @@ export class Session implements SessionFace {
     this.openError = null
     this.notifier.markDirty()
     try {
-      const router = this.remoteRouter()
-      if (router !== undefined && router.owns(this.sessionId) && this.remoteSubscription === null) {
-        this.remoteSubscription = router.subscribe(this.sessionId, (frame) => {
-          this.handleMuxEnvelope('remote' as RpcId, frame)
-        })
-      }
       let { result } = await this.history({ maxMessages: PAGE_MESSAGES })
       if (generation !== this.openGeneration) return
       if (!result.ok) {
@@ -786,19 +785,11 @@ export class Session implements SessionFace {
     hasMore: boolean
     projections?: ProjectionsBaseline
   }>> {
-    const router = this.remoteRouter()
-    if (router !== undefined && router.owns(this.sessionId)) {
-      return router.history(this.sessionId, payload).then(result => ({ rpcId: 'remote' as RpcId, result }))
-    }
     return this.address === undefined
-      ? this.api.sessions.history({ sessionId: this.sessionId, ...payload })
-      : this.api.subagents.history({ ...this.address, ...payload })
+      ? this.transport.history(payload)
+      : this.transport.subagentHistory(this.address, payload)
   }
 
-  /** Resolve the optional router contributed by the remote-session plugin. */
-  private remoteRouter(): RemoteSessionRouter | undefined {
-    return this.actx?.get(REMOTE_SESSION_ROUTER) as RemoteSessionRouter | undefined
-  }
 }
 
 /** Convert one wire history row into the assembler's transport-neutral input. */

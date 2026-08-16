@@ -6,22 +6,9 @@
  * Export discipline: packages/client/AGENTS.md.
  */
 
-import type { ClientContext, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
-import type { HistoryEntry, MuxFrame, PromptContentPart, RpcResult } from '@deepseek-ai/dsh-api-remotes/client'
-
-const REMOTE_SESSION_ROUTER = 'remoteSessionRouter'
-
-interface RemoteSessionRouter {
-  owns(sessionId: SessionId): boolean
-  history(
-    sessionId: SessionId,
-    payload: { beforeSeq?: number; maxMessages?: number },
-  ): Promise<RpcResult<{ events: HistoryEntry[]; hasMore: boolean }>>
-  prompt(sessionId: SessionId, content: PromptContentPart[], mode: 'queue' | 'steer'): Promise<RpcResult<{ accepted: true }>>
-  cancel(sessionId: SessionId): Promise<RpcResult<{ accepted: true }>>
-  subscribe(sessionId: SessionId, listener: (frame: MuxFrame) => void): () => void
-}
-import type { HubStatusResponse, HubWorkspaceListResult, HubWorkspaceSession } from '@deepseek-ai/dsh-hub-protocol'
+import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { HubStatusResponse, HubWorkspaceListResult } from '@deepseek-ai/dsh-hub-protocol'
+import { createRemoteSessionTransport, REMOTE_SESSION_REGISTRY, REMOTE_WORKSPACE_SOURCE, RemoteSessionTransportRegistry, type RemoteWorkspaceSource } from '@deepseek-ai/dsh-hub-web-adapter'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { HubSection, type HubStatusResult } from './HubSection.tsx'
@@ -60,57 +47,58 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-hub: dictionaries')
 
   const t = ctx.locale.bind(NS)
+  let endpointId = 'remote:configured-hub' as `remote:${string}`
+  const transportRegistry = new RemoteSessionTransportRegistry()
+  let disposeTransport = (): void => {}
 
-  const remoteSessionIds = new Set<string>()
-  const router: RemoteSessionRouter = {
-    owns: sessionId => remoteSessionIds.has(String(sessionId)),
-    history: async (sessionId, _payload) => {
-      const response = await globalThis.fetch(`/api/hub/session/load?id=${encodeURIComponent(String(sessionId))}`, { credentials: 'same-origin' })
-      if (!response.ok) return { ok: false, error: { code: 'internal', message: `HTTP ${response.status}`, details: {} } } as RpcResult<{ events: HistoryEntry[]; hasMore: boolean }>
-      const loaded = await response.json() as { events: HistoryEntry['event'][] }
-      return { ok: true, value: { events: loaded.events.map(event => ({ event })), hasMore: false } }
+  const bindTransport = (): void => {
+    disposeTransport()
+    disposeTransport = transportRegistry.register(createRemoteSessionTransport(() => endpointId))
+  }
+
+  const remoteWorkspaceSource: RemoteWorkspaceSource = {
+    listSelected: async () => {
+      const response = await globalThis.fetch('/api/hub/workspaces', { credentials: 'same-origin' })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const result = await response.json() as HubWorkspaceListResult
+      const selected = readSelectedWorkspaceIds()
+      const endpointChanged = endpointId !== result.endpointId
+      endpointId = result.endpointId
+      if (endpointChanged) bindTransport()
+      return result.workspaces
+        .filter(workspace => selected.includes(workspace.id))
+        .map(workspace => ({
+          endpointId,
+          workspaceId: workspace.id,
+          title: workspace.title,
+          path: workspace.path,
+          sessions: workspace.sessions.map(session => ({
+            endpointId: session.endpointId,
+            sessionId: session.sessionId,
+            updatedAt: session.updatedAt,
+            running: session.running,
+            blank: session.blank,
+            ...(session.cwd === undefined ? {} : { cwd: session.cwd }),
+            ...(session.title === undefined ? {} : { title: session.title }),
+            ...(session.agentPreset === undefined ? {} : { agentPreset: session.agentPreset }),
+            ...(session.parentSessionId === undefined ? {} : { parentSessionId: session.parentSessionId }),
+            ...(session.origin === undefined ? {} : { origin: session.origin }),
+          })),
+        }))
     },
-    prompt: async (sessionId, content, mode) => {
-      const text = content.filter((part): part is Extract<PromptContentPart, { type: 'text' }> => part.type === 'text').map(part => part.text).join('\n')
-      const query = new URLSearchParams({ id: String(sessionId), text, mode })
-      const response = await globalThis.fetch(`/api/hub/session/message?${query}`, { credentials: 'same-origin' })
-      if (!response.ok) return { ok: false, error: { code: 'internal', message: `HTTP ${response.status}`, details: {} } } as RpcResult<{ accepted: true }>
-      return { ok: true, value: { accepted: true } }
-    },
-    cancel: async (sessionId) => {
-      const response = await globalThis.fetch(`/api/hub/session/cancel?id=${encodeURIComponent(String(sessionId))}`, { credentials: 'same-origin' })
-      if (!response.ok) return { ok: false, error: { code: 'internal', message: `HTTP ${response.status}`, details: {} } } as RpcResult<{ accepted: true }>
-      return { ok: true, value: { accepted: true } }
-    },
-    subscribe: (sessionId, listener) => {
-      const source = new EventSource(`/api/hub/session/stream?id=${encodeURIComponent(String(sessionId))}`)
-      source.onmessage = (event) => {
-        const notification = JSON.parse(event.data) as { event: Record<string, unknown> }
-        listener({ type: 'session/event', sessionId, event: notification.event as never } as MuxFrame)
-      }
-      return () => { source.close() }
+    createSession: async (workspace) => {
+      const response = await globalThis.fetch(`/api/hub/workspace-session/create?workspaceId=${encodeURIComponent(workspace.workspaceId)}`, { credentials: 'same-origin' })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const result = await response.json() as { sessionId: string }
+      return result.sessionId as never
     },
   }
-  ctx.provide(REMOTE_SESSION_ROUTER, router)
+  ctx.provide(REMOTE_SESSION_REGISTRY, transportRegistry)
   ctx.effect(() => {
-    const onKnown = (event: Event): void => {
-      const detail = (event as CustomEvent<HubWorkspaceSession>).detail
-      remoteSessionIds.add(String(detail.sessionId))
-      ;(ctx.sessions as unknown as {
-        adoptRemote: (summary: HubWorkspaceSession) => void
-      }).adoptRemote(detail)
-    }
-    const onCreated = (event: Event): void => {
-      const detail = (event as CustomEvent<{ sessionId: SessionId }>).detail
-      remoteSessionIds.add(String(detail.sessionId))
-    }
-    globalThis.addEventListener('dsh:remote-workspace-session-known', onKnown)
-    globalThis.addEventListener('dsh:remote-workspace-session-created', onCreated)
-    return () => {
-      globalThis.removeEventListener('dsh:remote-workspace-session-known', onKnown)
-      globalThis.removeEventListener('dsh:remote-workspace-session-created', onCreated)
-    }
-  }, 'ui-hub: remote session adoption')
+    bindTransport()
+    return () => disposeTransport()
+  }, 'ui-hub: remote endpoint transport')
+  ctx.provide(REMOTE_WORKSPACE_SOURCE, remoteWorkspaceSource)
 
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
@@ -128,16 +116,17 @@ export function apply(ctx: ClientContext): void {
         const response = await globalThis.fetch('/api/hub/workspaces', { credentials: 'same-origin' })
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
         const result = await response.json() as HubWorkspaceListResult
-        for (const workspace of result.workspaces) {
-          for (const session of workspace.sessions) {
-            remoteSessionIds.add(String(session.sessionId))
-            ;(ctx.sessions as unknown as {
-              adoptRemote: (summary: HubWorkspaceSession) => void
-            }).adoptRemote(session)
-          }
-        }
         return result
       },
     }),
   }, HubSection))
+}
+
+function readSelectedWorkspaceIds(): string[] {
+  try {
+    const value: unknown = JSON.parse(globalThis.localStorage.getItem('dsh.remote.selected-workspaces') ?? '[]')
+    return Array.isArray(value) && value.every(item => typeof item === 'string') ? value : []
+  } catch {
+    return []
+  }
 }

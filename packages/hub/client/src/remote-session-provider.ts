@@ -34,11 +34,11 @@ export class RemoteAgentClient {
   constructor(private readonly provider: RemoteSessionProvider) {}
 
   /** Queue one text prompt on the remote Agent. */
-  async sendText(sessionId: SessionId, text: string): Promise<void> {
-    await this.send(sessionId, createUserMessage({
+  async sendText(sessionId: SessionId, text: string, mode: 'queue' | 'steer' = 'queue'): Promise<void> {
+    await this.sendMessage(sessionId, createUserMessage({
       content: [{ type: 'text', text }],
       source: { kind: 'user' },
-    }))
+    }), mode)
   }
 
   /** Queue one already normalized user message on the remote Agent. */

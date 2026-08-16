@@ -9,7 +9,7 @@
  */
 import type { AttachmentIdType, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type {
-  MessageId, PromptContentPart, QueueAction, RpcResult, SessionId,
+  MessageId, ModelSelection, PromptContentPart, QueueAction, RpcResponse, RpcResult, SessionId, SessionModels,
 } from '@deepseek-ai/dsh-api-remotes/client'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import type { ConversationSnapshot } from '../sessions/conversation.ts'
@@ -30,6 +30,10 @@ export interface ProjectionsFace {
 export interface ISession {
   /** The session's host identity (agent id — same axis). */
   readonly sessionId: SessionId
+  /** Load the model directory from the session's owning endpoint. */
+  models(): Promise<RpcResponse<SessionModels>>
+  /** Persist a model selection through the session's owning endpoint. */
+  selectModel(selection: ModelSelection): Promise<RpcResponse<{ selected: ModelSelection }>>
   /** Host-computed projection values by key (the useProjection seat). */
   readonly projections: ProjectionsFace
   /**

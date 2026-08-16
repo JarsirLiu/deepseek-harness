@@ -8,6 +8,7 @@ import type {
   SessionListState, SessionProvideDescriptor, SessionSearchResultItem, SessionSummary, SnapshotStore,
   SubagentAddress,
 } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ModelSelection, RpcResponse, SessionModels } from '@deepseek-ai/dsh-api-remotes/client'
 // The double reports the wire schema's own search bound, like the production
 // service — a transport-varying limit would be a fiction no client can see.
 import { SESSION_SEARCH_RESULT_LIMIT } from '@deepseek-ai/dsh-host-apiproxy/api'
@@ -136,6 +137,16 @@ export class FixtureSession implements SessionFace {
    */
   rename(): never {
     throw new Error(`test session "${this.sessionId}": rename is not stubbed — supply it on the fixture's session face`)
+  }
+
+  /** Fail-loud stub; supply `models` on the fixture's session face to exercise model selection. */
+  models(): Promise<RpcResponse<SessionModels>> {
+    throw new Error(`test session "${this.sessionId}": models is not stubbed — supply it on the fixture's session face`)
+  }
+
+  /** Fail-loud stub; supply `selectModel` on the fixture's session face to exercise model selection. */
+  selectModel(_selection: ModelSelection): Promise<RpcResponse<{ selected: ModelSelection }>> {
+    throw new Error(`test session "${this.sessionId}": selectModel is not stubbed — supply it on the fixture's session face`)
   }
 }
 

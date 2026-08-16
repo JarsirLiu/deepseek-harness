@@ -33,6 +33,8 @@ interface ClientRecord {
  * Hub server configuration.
  */
 export interface HubServerConfig {
+  /** Stable identity exposed to clients for this Hub endpoint. */
+  endpointId?: `remote:${string}`
   /** TCP port to listen on. Defaults to 8765. */
   port?: number
   /** Host to bind to. Defaults to '0.0.0.0'. */
@@ -60,7 +62,6 @@ export class HubServer {
   private readonly httpServer = createServer()
   private readonly wss = new WebSocketServer({ noServer: true })
   private readonly clients = new Map<string, ClientRecord>()
-  private readonly resumedAgents = new Map<SessionId, { agent: import('@deepseek-ai/dsh-agent').Agent; dispose: () => Promise<void> }>()
   private readonly eventDisposers: Array<() => void> = []
   private readonly config: Required<HubServerConfig>
   private started = false
@@ -70,6 +71,7 @@ export class HubServer {
     config: HubServerConfig = {},
   ) {
     this.config = {
+      endpointId: config.endpointId ?? `remote:${config.serverName ?? DEFAULTS.serverName}`,
       port: config.port ?? DEFAULTS.port,
       host: config.host ?? DEFAULTS.host,
       authTokens: config.authTokens ?? [],
@@ -102,13 +104,14 @@ export class HubServer {
     // Subscribe to session events for forwarding to subscribed clients.
     this.eventDisposers.push(this.ctx.on('session/event', (_session, event) => {
       const sessionId = _session.id
-      const notification: HubEventNotification = { sessionId, event }
+      const notification: HubEventNotification = { endpointId: this.config.endpointId, sessionId, event }
       this.broadcastToSubscribers(sessionId, 'hub/event', notification)
     }))
 
     // Subscribe to session lifecycle events.
     this.eventDisposers.push(this.ctx.on('session/created', (session) => {
       const notification: HubStatusNotification = {
+        endpointId: this.config.endpointId,
         sessionId: session.id,
         status: 'created',
       }
@@ -117,6 +120,7 @@ export class HubServer {
 
     this.eventDisposers.push(this.ctx.on('session/disposed', (session) => {
       const notification: HubStatusNotification = {
+        endpointId: this.config.endpointId,
         sessionId: session.id,
         status: 'disposed',
       }
@@ -127,8 +131,6 @@ export class HubServer {
   /** Stop the server and close all connections. */
   async stop(): Promise<void> {
     for (const dispose of this.eventDisposers.splice(0)) dispose()
-    for (const entry of this.resumedAgents.values()) await entry.dispose()
-    this.resumedAgents.clear()
     for (const [id, client] of this.clients) {
       client.transport.close()
       this.clients.delete(id)
@@ -180,6 +182,28 @@ export class HubServer {
         return await this.handleWorkspaces()
       case 'hub/workspace-session/create':
         return await this.handleWorkspaceSessionCreate(params as { workspaceId: string })
+      case 'hub/session/models':
+        return await this.handleSessionModels(params as { id: SessionId })
+      case 'hub/session/select-model':
+        return await this.handleSessionSelectModel(params as { id: SessionId; provider: string; model: string; reasoningEffort?: string })
+      case 'hub/session/rename':
+        return await this.handleSessionRename(params as { id: SessionId; title: string })
+      case 'hub/session/update-queue':
+        return await this.handleSessionUpdateQueue(params as { id: SessionId; itemId: string; action: never })
+      case 'hub/session/attachment':
+        return await this.handleSessionAttachment(params as { id: SessionId; attachmentId: string })
+      case 'hub/session/fork':
+        return await this.handleSessionFork(params as { id: SessionId; atSeq?: number })
+      case 'hub/session/history':
+        return await this.handleSessionHistory(params as { id: SessionId; beforeSeq?: number; maxMessages?: number })
+      case 'hub/subagent/list':
+        return await this.handleSubagent('list', params)
+      case 'hub/subagent/history':
+        return await this.handleSubagent('history', params)
+      case 'hub/subagent/prompt':
+        return await this.handleSubagent('prompt', params)
+      case 'hub/subagent/interrupt':
+        return await this.handleSubagent('interrupt', params)
       case 'hub/create':
         return this.handleCreate(params as { meta: import('@deepseek-ai/dsh-session').SessionHeader })
       case 'hub/load':
@@ -203,6 +227,18 @@ export class HubServer {
     }
   }
 
+  private async handleSubagent(method: 'list' | 'history' | 'prompt' | 'interrupt', params: Record<string, unknown>): Promise<unknown> {
+    const api = this.ctx.get('apiProxy') as {
+      subagents?: Record<string, (request: unknown, signal?: AbortSignal) => Promise<{ result: unknown }>>
+    } | undefined
+    const operation = api?.subagents?.[method]
+    if (operation === undefined) throw new Error('remote subagent API is unavailable')
+    const response = await operation({ rpcId: `hub-subagent-${method}-${Date.now()}`, payload: params })
+    const result = response.result as { ok?: boolean; value?: unknown; error?: unknown }
+    if (result.ok !== true) throw new Error(typeof result.error === 'string' ? result.error : `remote subagent ${method} failed`)
+    return result.value
+  }
+
   private handleHandshake(client: ClientRecord, params: HubHandshakeParams): HubHandshakeResult {
     // Validate auth token.
     if (this.config.authTokens.length > 0) {
@@ -218,6 +254,7 @@ export class HubServer {
     }
 
     return {
+      endpointId: this.config.endpointId,
       serverInfo: {
         name: this.config.serverName,
         version: DEFAULTS.version,
@@ -242,7 +279,7 @@ export class HubServer {
   }
 
   /** List directories registered by the remote device's workspace service. */
-  private async handleWorkspaces(): Promise<{ workspaces: import('@deepseek-ai/dsh-hub-protocol').HubWorkspaceEntry[] }> {
+  private async handleWorkspaces(): Promise<import('@deepseek-ai/dsh-hub-protocol').HubWorkspaceListResult> {
     const registry = this.ctx.get('workspaceRegistry') as {
       list: () => Array<{ id: string; title: string; path: string; sessionIds: SessionId[] }>
     } | undefined
@@ -293,6 +330,7 @@ export class HubServer {
         : summary] as const
     })))
     return {
+      endpointId: this.config.endpointId,
       workspaces: registry?.list().map(workspace => ({
         id: workspace.id,
         title: workspace.title,
@@ -303,6 +341,7 @@ export class HubServer {
           const title = summary.projections?.values?.title
           return [{
             sessionId: summary.sessionId,
+            endpointId: this.config.endpointId,
             updatedAt: summary.updatedAt,
             running: summary.running,
             blank: summary.blank,
@@ -336,6 +375,131 @@ export class HubServer {
     })
     if (!response.result.ok) throw new Error(`remote session creation failed: ${JSON.stringify(response.result.error)}`)
     return response.result.value
+  }
+
+  private async handleSessionModels(
+    params: { id: SessionId },
+  ): Promise<Record<string, unknown>> {
+    const api = this.ctx.get('apiProxy') as {
+      sessions: {
+        models: (request: { rpcId: string; payload: { sessionId: SessionId } }) => Promise<{
+          result: { ok: true; value: Record<string, unknown> } | { ok: false; error: unknown }
+        }>
+      }
+    } | undefined
+    if (api === undefined) throw new Error('remote api proxy is unavailable')
+    const response = await api.sessions.models({
+      rpcId: `hub-models-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      payload: { sessionId: params.id },
+    })
+    if (!response.result.ok) {
+      throw new Error(`remote model listing failed: ${JSON.stringify(response.result.error)}`)
+    }
+    return response.result.value
+  }
+
+  private async handleSessionSelectModel(
+    params: { id: SessionId; provider: string; model: string; reasoningEffort?: string },
+  ): Promise<{ selected: { provider: string; model: string; reasoningEffort?: string } }> {
+    const api = this.ctx.get('apiProxy') as {
+      sessions: {
+        selectModel: (request: {
+          rpcId: string
+          payload: { sessionId: SessionId; provider: string; model: string; reasoningEffort?: string }
+        }) => Promise<{
+          result: { ok: true; value: { selected: { provider: string; model: string; reasoningEffort?: string } } }
+            | { ok: false; error: unknown }
+        }>
+      }
+    } | undefined
+    if (api === undefined) throw new Error('remote api proxy is unavailable')
+    const response = await api.sessions.selectModel({
+      rpcId: `hub-select-model-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      payload: {
+        sessionId: params.id,
+        provider: params.provider,
+        model: params.model,
+        ...(params.reasoningEffort === undefined ? {} : { reasoningEffort: params.reasoningEffort }),
+      },
+    })
+    if (!response.result.ok) throw new Error(`remote model selection failed: ${JSON.stringify(response.result.error)}`)
+    return response.result.value
+  }
+
+  private async handleSessionRename(params: { id: SessionId; title: string }): Promise<{ title: string; seq: number }> {
+    const api = this.ctx.get('apiProxy') as { sessions: { rename: (request: { rpcId: string; payload: { sessionId: SessionId; title: string } }) => Promise<{ result: { ok: true; value: { title: string; seq: number } } | { ok: false; error: unknown } }> } }
+    const response = await api.sessions.rename({ rpcId: `hub-rename-${randomUUID()}`, payload: { sessionId: params.id, title: params.title } })
+    if (!response.result.ok) throw new Error(`remote session rename failed: ${JSON.stringify(response.result.error)}`)
+    return response.result.value
+  }
+
+  private async handleSessionUpdateQueue(params: { id: SessionId; itemId: string; action: never }): Promise<{ accepted: true }> {
+    const api = this.ctx.get('apiProxy') as { sessions: { updateQueue: (request: { rpcId: string; payload: { sessionId: SessionId; itemId: string; action: never } }) => Promise<{ result: { ok: true; value: { accepted: true } } | { ok: false; error: unknown } }> } }
+    const response = await api.sessions.updateQueue({ rpcId: `hub-queue-${randomUUID()}`, payload: { sessionId: params.id, itemId: params.itemId, action: params.action } })
+    if (!response.result.ok) throw new Error(`remote queue update failed: ${JSON.stringify(response.result.error)}`)
+    return response.result.value
+  }
+
+  private async handleSessionAttachment(
+    params: { id: SessionId; attachmentId: string },
+  ): Promise<{ attachment: unknown; data: string }> {
+    const api = this.ctx.get('apiProxy') as {
+      sessions: {
+        attachment: (request: {
+          rpcId: string
+          payload: { sessionId: SessionId; attachmentId: string }
+        }) => Promise<{
+          result: { ok: true; value: { attachment: unknown; data: string } }
+            | { ok: false; error: unknown }
+        }>
+      }
+    }
+    const response = await api.sessions.attachment({ rpcId: `hub-attachment-${randomUUID()}`, payload: { sessionId: params.id, attachmentId: params.attachmentId } })
+    if (!response.result.ok) throw new Error(`remote attachment read failed: ${JSON.stringify(response.result.error)}`)
+    return response.result.value
+  }
+
+  private async handleSessionFork(
+    params: { id: SessionId; atSeq?: number },
+  ): Promise<{ sessionId: SessionId }> {
+    const api = this.ctx.get('apiProxy') as {
+      sessions: {
+        fork: (request: {
+          rpcId: string
+          payload: { sessionId: SessionId; atSeq?: number }
+        }) => Promise<{
+          result: { ok: true; value: { sessionId: SessionId } }
+            | { ok: false; error: unknown }
+        }>
+      }
+    }
+    const response = await api.sessions.fork({ rpcId: `hub-fork-${randomUUID()}`, payload: { sessionId: params.id, ...(params.atSeq === undefined ? {} : { atSeq: params.atSeq }) } })
+    if (!response.result.ok) throw new Error(`remote session fork failed: ${JSON.stringify(response.result.error)}`)
+    return response.result.value
+  }
+
+  private async handleSessionHistory(params: { id: SessionId; beforeSeq?: number; maxMessages?: number }): Promise<unknown> {
+    const api = this.ctx.get('apiProxy') as {
+      sessions?: {
+        history: (request: {
+          rpcId: string
+          payload: { sessionId: SessionId; beforeSeq?: number; maxMessages?: number }
+        }) => Promise<{ result: unknown }>
+      }
+    } | undefined
+    const history = api?.sessions?.history
+    if (history === undefined) throw new Error('remote session history API is unavailable')
+    const response = await history({
+      rpcId: `hub-session-history-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      payload: {
+        sessionId: params.id,
+        ...(params.beforeSeq === undefined ? {} : { beforeSeq: params.beforeSeq }),
+        ...(params.maxMessages === undefined ? {} : { maxMessages: params.maxMessages }),
+      },
+    })
+    const result = response.result as { ok?: boolean; value?: unknown; error?: unknown }
+    if (result.ok !== true) throw new Error(typeof result.error === 'string' ? result.error : `remote session history failed: ${JSON.stringify(result.error)}`)
+    return result.value
   }
 
   private async handleCreate(
@@ -410,28 +574,43 @@ export class HubServer {
   private async handleAgentMessage(
     params: { id: SessionId; message: UserMessage; mode?: 'queue' | 'steer' },
   ): Promise<{ accepted: true }> {
-    const agent = await this.ensureAgent(params.id)
-    if (params.mode === 'steer') agent.steer(params.message)
-    else agent.followup(params.message)
-    return { accepted: true }
+    const api = this.ctx.get('apiProxy') as {
+      sessions: {
+        prompt: (request: { rpcId: string; payload: { sessionId: SessionId; mode: 'queue' | 'steer'; content: UserMessage['content'] } }) => Promise<{
+          result: { ok: true; value: { accepted: true } } | { ok: false; error: unknown }
+        }>
+      }
+    } | undefined
+    if (api === undefined) throw new Error('remote api proxy is unavailable')
+    const response = await api.sessions.prompt({
+      rpcId: `hub-agent-message-${randomUUID()}`,
+      payload: {
+        sessionId: params.id,
+        mode: params.mode ?? 'queue',
+        content: params.message.content,
+      },
+    })
+    if (!response.result.ok) throw new Error(`remote prompt failed: ${JSON.stringify(response.result.error)}`)
+    return response.result.value
   }
 
   private async handleAgentCancel(
     params: { id: SessionId; cause?: 'user' | 'shutdown' | 'remote' },
   ): Promise<Record<string, never>> {
-    const agent = await this.ensureAgent(params.id)
-    agent.cancel({ kind: params.cause === 'user' ? 'user' : 'parent' })
-    return {}
-  }
-
-  private async ensureAgent(id: SessionId): Promise<import('@deepseek-ai/dsh-agent').Agent> {
-    const live = this.ctx.agents.get(id)
-    if (live !== undefined) return live
-    const retained = this.resumedAgents.get(id)
-    if (retained !== undefined) return retained.agent
-    const handle = await this.ctx.agents.resume({ resumeSessionId: id })
-    this.resumedAgents.set(id, handle)
-    return handle.agent
+    const api = this.ctx.get('apiProxy') as {
+      sessions: {
+        cancel: (request: { rpcId: string; payload: { sessionId: SessionId } }) => Promise<{
+          result: { ok: true; value: Record<string, never> } | { ok: false; error: unknown }
+        }>
+      }
+    } | undefined
+    if (api === undefined) throw new Error('remote api proxy is unavailable')
+    const response = await api.sessions.cancel({
+      rpcId: `hub-agent-cancel-${randomUUID()}`,
+      payload: { sessionId: params.id },
+    })
+    if (!response.result.ok) throw new Error(`remote cancel failed: ${JSON.stringify(response.result.error)}`)
+    return response.result.value
   }
 
   private handleSubscribe(

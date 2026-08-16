@@ -30,6 +30,9 @@
       "path": "../../hub/protocol"
     },
     {
+      "path": "../../hub/web-adapter"
+    },
+    {
       "path": "../../runtime-diagnostics/invariants"
     }
   ]

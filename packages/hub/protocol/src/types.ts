@@ -62,6 +62,8 @@ export interface HubWorkspaceEntry {
 
 /** Remote session summary projected by the owning Hub device. */
 export interface HubWorkspaceSession {
+  /** Stable identity of the remote Hub endpoint. */
+  endpointId: `remote:${string}`
   sessionId: SessionId
   updatedAt: number
   running: boolean
@@ -75,6 +77,8 @@ export interface HubWorkspaceSession {
 
 /** Result of listing workspaces on the remote Hub. */
 export interface HubWorkspaceListResult {
+  /** Stable identity of the Hub endpoint that owns these workspaces. */
+  endpointId: `remote:${string}`
   workspaces: HubWorkspaceEntry[]
 }
 
@@ -86,6 +90,18 @@ export interface HubWorkspaceSessionCreateParams {
 /** Result of creating a session in a remote workspace. */
 export interface HubWorkspaceSessionCreateResult {
   sessionId: SessionId
+}
+
+/** Parameters for a remote direct-child catalog request. */
+export interface HubSubagentListParams { parentSessionId: SessionId }
+/** Parameters shared by remote subagent transcript and control requests. */
+export interface HubSubagentAddress { parentSessionId: SessionId; childSessionId: SessionId; mode: 'one-shot' | 'continuable' }
+
+/** Model selection forwarded to the owning remote session. */
+export interface HubSessionModelSelection {
+  provider: string
+  model: string
+  reasoningEffort?: string
 }
 
 /** Parameters for appending events to a session. */
@@ -145,6 +161,8 @@ export interface HubSubscribeParams {
 
 /** A session event notification pushed from the hub. */
 export interface HubEventNotification {
+  /** Stable endpoint identity assigned by the publishing Hub. */
+  endpointId: `remote:${string}`
   /** Session the event belongs to. */
   sessionId: SessionId
   /** The full session-log event envelope. */
@@ -153,6 +171,8 @@ export interface HubEventNotification {
 
 /** A session status notification. */
 export interface HubStatusNotification {
+  /** Stable endpoint identity assigned by the publishing Hub. */
+  endpointId: `remote:${string}`
   /** Session whose status changed. */
   sessionId: SessionId
   /** The new status. */
@@ -181,6 +201,8 @@ export interface HubHandshakeParams {
 
 /** Result of the handshake. */
 export interface HubHandshakeResult {
+  /** Stable identity of the remote Hub endpoint. */
+  endpointId: `remote:${string}`
   /** Server identity. */
   serverInfo: { name: string; version: string }
   /** Server capabilities. */
@@ -192,6 +214,8 @@ export type HubConnectionState = 'disconnected' | 'connecting' | 'connected' | '
 
 /** Status response served by the host-side hub client web endpoint. */
 export interface HubStatusResponse {
+  /** Stable client-configured identity of the remote endpoint. */
+  endpointId: `remote:${string}`
   /** Current client connection state. */
   status: HubConnectionState
   /** Whether the client has an open hub connection. */
@@ -216,6 +240,16 @@ export interface HubRequestMap {
   'hub/list': { params: HubListParams; result: HubListResult }
   'hub/workspaces': { params: Record<string, never>; result: HubWorkspaceListResult }
   'hub/workspace-session/create': { params: HubWorkspaceSessionCreateParams; result: HubWorkspaceSessionCreateResult }
+  'hub/session/models': { params: { id: SessionId }; result: Record<string, unknown> }
+  'hub/session/select-model': { params: { id: SessionId } & HubSessionModelSelection; result: { selected: HubSessionModelSelection } }
+  'hub/session/rename': { params: { id: SessionId; title: string }; result: { title: string; seq: number } }
+  'hub/session/update-queue': { params: { id: SessionId; itemId: string; action: unknown }; result: { accepted: true } }
+  'hub/session/attachment': { params: { id: SessionId; attachmentId: string }; result: { attachment: unknown; data: string } }
+  'hub/session/fork': { params: { id: SessionId; atSeq?: number }; result: { sessionId: SessionId } }
+  'hub/subagent/list': { params: HubSubagentListParams; result: Record<string, unknown> }
+  'hub/subagent/history': { params: HubSubagentAddress & { beforeSeq?: number; maxMessages?: number }; result: Record<string, unknown> }
+  'hub/subagent/prompt': { params: HubSubagentAddress & { content: unknown[] }; result: Record<string, unknown> }
+  'hub/subagent/interrupt': { params: HubSubagentAddress; result: Record<string, unknown> }
   'hub/create': { params: HubCreateParams; result: HubCreateResult }
   'hub/load': { params: HubLoadParams; result: HubLoadResult }
   'hub/append': { params: HubAppendParams; result: HubAppendResult }

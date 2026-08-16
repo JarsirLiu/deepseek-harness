@@ -58,6 +58,9 @@
     },
     {
       "path": "../../api/remotes/tsconfig.client.json"
+    },
+    {
+      "path": "../../hub/web-adapter"
     }
   ],
   "exclude": [

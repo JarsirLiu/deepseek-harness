@@ -9,6 +9,7 @@ afterEach(cleanup)
 const READY = {
   kind: 'ready',
   status: {
+    endpointId: 'remote:test-hub',
     status: 'connected',
     uri: 'ws://hub.example.test',
     isConnected: true,

@@ -37,6 +37,8 @@ export interface SessionsPort {
    * @returns the new session id.
    */
   create(opts: { workspaceId: WorkspaceId }): Promise<SessionId>
+  /** Refresh endpoint-owned session summaries when a remote workspace changes. */
+  refreshRemoteSessions?(): Promise<void>
   /**
    * Select a session as current.
    * @param id - session id (must exist in the list store).
