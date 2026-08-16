@@ -157,60 +157,80 @@ async function call<T>(method: string, params: Record<string, unknown>): Promise
     body: JSON.stringify({ method, params }),
   })
   if (!response.ok) return failure(response)
-  return { ok: true, value: await response.json() as T }
-}
-
-function encode(value: unknown): string {
-  return encodeURIComponent(String(value))
+  const body = await response.json() as { result?: RpcResult<T> }
+  if (body.result !== undefined) return body.result
+  return { ok: false, error: { code: 'internal', message: 'Hub API response is missing result', details: {} } }
 }
 
 /** Create the Web transport for one configured Hub endpoint. */
 export function createRemoteSessionTransport(endpointId: SessionEndpointId | (() => SessionEndpointId)): RemoteSessionTransport {
   const resolveEndpoint = typeof endpointId === 'function' ? endpointId : () => endpointId
   if (!resolveEndpoint().startsWith('remote:')) throw new Error(`Hub Web adapter requires a remote endpoint: ${resolveEndpoint()}`)
+  let eventSource: EventSource | undefined
+  const eventListeners = new Map<string, Set<(frame: MuxFrame) => void>>()
+  const closeEvents = (): void => {
+    if (eventListeners.size !== 0) return
+    eventSource?.close()
+    eventSource = undefined
+  }
+  const openEvents = (): void => {
+    if (eventSource !== undefined) return
+    eventSource = new EventSource('/api/hub/events.mux')
+    eventSource.onmessage = (event) => {
+      const notification = JSON.parse(event.data) as { endpointId: `remote:${string}`; event: Record<string, unknown>; sessionId: SessionId }
+      const listeners = eventListeners.get(String(notification.sessionId))
+      if (listeners === undefined) return
+      const frame = { type: 'session/event', sessionId: notification.sessionId, event: notification.event as never, endpointId: notification.endpointId } as RemoteSessionFrame
+      for (const listener of listeners) listener(frame)
+    }
+    eventSource.onerror = () => {
+      eventSource?.close()
+      eventSource = undefined
+      if (eventListeners.size !== 0) openEvents()
+    }
+  }
   return {
     get endpointId() { return resolveEndpoint() as `remote:${string}` },
     owns: ref => ref.endpointId === resolveEndpoint(),
     history: async (sessionId, payload) => {
-      const result = await call<{ result: RpcResult<RemoteHistoryResponse> }>('hub/api/request', {
-        method: 'sessions.history',
+      const result = await call<RemoteHistoryResponse>('hub/api/request', {
+        method: 'session.history',
         payload: { sessionId, ...payload },
       })
       if (!result.ok) return result
-      if (!result.value.result.ok) return result.value.result
       return {
         ok: true,
         value: {
-          events: result.value.result.value.events,
-          hasMore: result.value.result.value.hasMore,
-          ...(result.value.result.value.projections === undefined ? {} : { projections: result.value.result.value.projections }),
+          events: result.value.events,
+          hasMore: result.value.hasMore,
+          ...(result.value.projections === undefined ? {} : { projections: result.value.projections }),
         },
       }
     },
-    prompt: (sessionId, content, mode) => call('hub/session/prompt', {
-      id: sessionId,
-      content,
-      mode,
-    }),
-    cancel: sessionId => call('hub/agent/cancel', { id: sessionId, cause: 'user' }),
-    models: sessionId => call('hub/session/models', { id: sessionId }),
-    selectModel: (sessionId, selection) => call('hub/session/select-model', { id: sessionId, ...selection }),
-    rename: (sessionId, title) => call('hub/session/rename', { id: sessionId, title }),
-    updateQueue: (sessionId, itemId, action) => call('hub/session/update-queue', { id: sessionId, itemId, action }),
-    readAttachment: (sessionId, attachmentId) => call('hub/session/attachment', { id: sessionId, attachmentId }),
-    fork: (sessionId, atSeq) => call('hub/session/fork', { id: sessionId, ...(atSeq === undefined ? {} : { atSeq }) }),
-    archiveSession: sessionId => call('hub/workspace/archive-session', { id: sessionId }),
-    subagentList: parentSessionId => call('hub/subagent/list', { parentSessionId }),
-    subagentHistory: (address, payload) => call('hub/subagent/history', { ...address, ...payload }),
-    subagentPrompt: (address, content) => call('hub/subagent/prompt', { ...address, content }),
-    subagentInterrupt: address => call('hub/subagent/interrupt', address),
+    prompt: (sessionId, content, mode) => call('hub/api/request', { method: 'session.prompt', payload: { sessionId, content, mode } }),
+    cancel: sessionId => call('hub/api/request', { method: 'session.cancel', payload: { sessionId } }),
+    models: sessionId => call('hub/api/request', { method: 'session.models', payload: { sessionId } }),
+    selectModel: (sessionId, selection) => call('hub/api/request', { method: 'session.selectModel', payload: { sessionId, ...selection } }),
+    rename: (sessionId, title) => call('hub/api/request', { method: 'session.rename', payload: { sessionId, title } }),
+    updateQueue: (sessionId, itemId, action) => call('hub/api/request', { method: 'session.updateQueue', payload: { sessionId, itemId, action } }),
+    readAttachment: (sessionId, attachmentId) => call('hub/api/request', { method: 'session.attachment', payload: { sessionId, attachmentId } }),
+    fork: (sessionId, atSeq) => call('hub/api/request', { method: 'session.fork', payload: { sessionId, ...(atSeq === undefined ? {} : { atSeq }) } }),
+    archiveSession: sessionId => call('hub/api/request', { method: 'workspace.archiveSession', payload: { sessionId } }),
+    subagentList: parentSessionId => call('hub/api/request', { method: 'subagent.list', payload: { parentSessionId } }),
+    subagentHistory: (address, payload) => call('hub/api/request', { method: 'subagent.history', payload: { ...address, ...payload } }),
+    subagentPrompt: (address, content) => call('hub/api/request', { method: 'subagent.prompt', payload: { ...address, content } }),
+    subagentInterrupt: address => call('hub/api/request', { method: 'subagent.interrupt', payload: address }),
     subscribe: (sessionId, listener) => {
-      const source = new EventSource(`/api/hub/session/stream?id=${encode(sessionId)}`)
-      source.onmessage = (event) => {
-        const notification = JSON.parse(event.data) as { endpointId: `remote:${string}`; event: Record<string, unknown> }
-        listener({ type: 'session/event', sessionId, event: notification.event as never, endpointId: notification.endpointId } as RemoteSessionFrame)
+      const key = String(sessionId)
+      const listeners = eventListeners.get(key) ?? new Set<(frame: MuxFrame) => void>()
+      eventListeners.set(key, listeners)
+      listeners.add(listener)
+      openEvents()
+      return () => {
+        const current = eventListeners.get(key)
+        if (current?.delete(listener) && current.size === 0) eventListeners.delete(key)
+        closeEvents()
       }
-      return () => source.close()
     },
     subscribeHost: (listener) => {
       const source = new EventSource('/api/hub/host/stream')

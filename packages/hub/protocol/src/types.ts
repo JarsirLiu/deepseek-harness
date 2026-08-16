@@ -256,31 +256,7 @@ export interface HubNotificationMap {
 export interface HubRequestMap {
   'hub/handshake': { params: HubHandshakeParams; result: HubHandshakeResult }
   'hub/list': { params: HubListParams; result: HubListResult }
-  'hub/workspaces': { params: Record<string, never>; result: HubWorkspaceListResult }
-  'hub/workspace-session/create': { params: HubWorkspaceSessionCreateParams; result: HubWorkspaceSessionCreateResult }
-  'hub/workspace/rename': { params: { workspaceId: string; title: string }; result: Record<string, unknown> }
-  'hub/workspace/delete': { params: { workspaceId: string }; result: { deleted: boolean } }
-  'hub/workspace/insert-before': { params: { workspaceId: string; beforeWorkspaceId?: string }; result: Record<string, unknown> }
-  'hub/workspace/insert-session-before': { params: { workspaceId: string; sessionId: SessionId; beforeSessionId?: SessionId }; result: Record<string, unknown> }
-  'hub/session/models': { params: { id: SessionId }; result: Record<string, unknown> }
-  'hub/session/select-model': { params: { id: SessionId } & HubSessionModelSelection; result: { selected: HubSessionModelSelection } }
-  'hub/session/rename': { params: { id: SessionId; title: string }; result: { title: string; seq: number } }
-  'hub/session/update-queue': { params: { id: SessionId; itemId: string; action: unknown }; result: { accepted: true } }
-  'hub/session/attachment': { params: { id: SessionId; attachmentId: string }; result: { attachment: unknown; data: string } }
-  'hub/session/fork': { params: { id: SessionId; atSeq?: number }; result: { sessionId: SessionId } }
-  'hub/workspace/archive-session': { params: { id: SessionId }; result: { archivedSessionIds: SessionId[] } }
-  'hub/subagent/list': { params: HubSubagentListParams; result: Record<string, unknown> }
-  'hub/subagent/history': { params: HubSubagentAddress & { beforeSeq?: number; maxMessages?: number }; result: Record<string, unknown> }
-  'hub/subagent/prompt': { params: HubSubagentAddress & { content: unknown[] }; result: Record<string, unknown> }
-  'hub/subagent/interrupt': { params: HubSubagentAddress; result: Record<string, unknown> }
-  'hub/create': { params: HubCreateParams; result: HubCreateResult }
-  'hub/load': { params: HubLoadParams; result: HubLoadResult }
-  'hub/append': { params: HubAppendParams; result: HubAppendResult }
-  'hub/inspect': { params: HubInspectParams; result: HubInspectResult }
-  'hub/delete': { params: HubDeleteParams; result: HubDeleteResult }
-  'hub/agent/message': { params: HubAgentMessageParams; result: HubAgentMessageResult }
-  'hub/agent/cancel': { params: HubAgentCancelParams; result: HubAgentCancelResult }
-  'hub/session/prompt': { params: HubSessionPromptParams; result: { accepted: true } }
+  'hub/workspaces': { params: { workspaceIds?: string[] }; result: HubWorkspaceListResult }
   'hub/subscribe': { params: HubSubscribeParams; result: HubAppendResult }
   'hub/unsubscribe': { params: HubSubscribeParams; result: HubAppendResult }
 }

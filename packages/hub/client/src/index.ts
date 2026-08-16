@@ -9,7 +9,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import { RemoteSessionProvider } from './remote-session-provider.ts'
 
-export { RemoteAgentClient, RemoteSessionProvider, HubConnectionError } from './remote-session-provider.ts'
+export { RemoteSessionProvider, HubConnectionError } from './remote-session-provider.ts'
 export type { RemoteHubConfig } from './remote-session-provider.ts'
 
 export const name = 'hub-client'
@@ -129,7 +129,7 @@ export function apply(ctx: Context, config: HubClientConfig): void {
     ctx.effect(() => configDispose, 'hub-client.webServer.config')
     const sessionStreamDispose = webServer.register({
       kind: 'exact',
-      path: '/api/hub/session/stream',
+      path: '/api/hub/events.mux',
       handler: (req: unknown, res: unknown) => {
         const request = req as { url?: string }
         const response = res as {
@@ -141,20 +141,17 @@ export function apply(ctx: Context, config: HubClientConfig): void {
         const id = request.url === undefined
           ? undefined
           : new URL(request.url, 'http://localhost').searchParams.get('id')
-        if (id === null || id === undefined) {
-          response.writeHead(400, { 'Content-Type': 'application/json' })
-          response.end()
-          return
-        }
         response.writeHead(200, {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
           Connection: 'keep-alive',
         })
         response.write(': connected\n\n')
-        const unsubscribe = provider.subscribe(id as import('@deepseek-ai/dsh-session').SessionId, (notification) => {
-          response.write(`data: ${JSON.stringify(notification)}\n\n`)
-        })
+        const unsubscribe = id === null || id === undefined
+          ? provider.onEvent(notification => response.write(`data: ${JSON.stringify(notification)}\n\n`))
+          : provider.subscribe(id as import('@deepseek-ai/dsh-session').SessionId, (notification) => {
+            response.write(`data: ${JSON.stringify(notification)}\n\n`)
+          })
         response.on?.('close', () => {
           unsubscribe()
           response.end()

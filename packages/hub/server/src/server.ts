@@ -10,7 +10,6 @@ import { createServer } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import {
   JsonRpcWebSocketTransport,
   type HubHandshakeParams,
@@ -183,63 +182,9 @@ export class HubServer {
       case 'hub/list':
         return this.handleList()
       case 'hub/workspaces':
-        return await this.handleWorkspaces()
-      case 'hub/workspace-session/create':
-        return await this.handleWorkspaceSessionCreate(params as { workspaceId: string })
+        return await this.handleWorkspaces(params as { workspaceIds?: string[] })
       case 'hub/api/request':
         return await this.handleApiRequest(params as { method: string; payload: Record<string, unknown> })
-      case 'hub/workspace/rename':
-        return await this.handleWorkspaceRename(params as { workspaceId: string; title: string })
-      case 'hub/workspace/delete':
-        return await this.handleWorkspaceDelete(params as { workspaceId: string })
-      case 'hub/workspace/insert-before':
-        return await this.handleWorkspaceInsertBefore(params as { workspaceId: string; beforeWorkspaceId?: string })
-      case 'hub/workspace/insert-session-before':
-        return await this.handleWorkspaceInsertSessionBefore(params as {
-          workspaceId: string
-          sessionId: SessionId
-          beforeSessionId?: SessionId
-        })
-      case 'hub/session/models':
-        return await this.handleSessionModels(params as { id: SessionId })
-      case 'hub/session/select-model':
-        return await this.handleSessionSelectModel(params as { id: SessionId; provider: string; model: string; reasoningEffort?: string })
-      case 'hub/session/rename':
-        return await this.handleSessionRename(params as { id: SessionId; title: string })
-      case 'hub/session/update-queue':
-        return await this.handleSessionUpdateQueue(params as { id: SessionId; itemId: string; action: never })
-      case 'hub/session/attachment':
-        return await this.handleSessionAttachment(params as { id: SessionId; attachmentId: string })
-      case 'hub/session/fork':
-        return await this.handleSessionFork(params as { id: SessionId; atSeq?: number })
-      case 'hub/workspace/archive-session':
-        return await this.handleWorkspaceArchiveSession(params as { id: SessionId })
-      case 'hub/session/history':
-        return await this.handleSessionHistory(params as { id: SessionId; beforeSeq?: number; maxMessages?: number })
-      case 'hub/session/prompt':
-        return await this.handleSessionPrompt(params as { id: SessionId; content: unknown[]; mode: 'queue' | 'steer'; clientTimeZone?: string })
-      case 'hub/subagent/list':
-        return await this.handleSubagent('list', params)
-      case 'hub/subagent/history':
-        return await this.handleSubagent('history', params)
-      case 'hub/subagent/prompt':
-        return await this.handleSubagent('prompt', params)
-      case 'hub/subagent/interrupt':
-        return await this.handleSubagent('interrupt', params)
-      case 'hub/create':
-        return this.handleCreate(params as { meta: import('@deepseek-ai/dsh-session').SessionHeader })
-      case 'hub/load':
-        return this.handleLoad(params as { id: SessionId })
-      case 'hub/append':
-        return this.handleAppend(params as { id: SessionId; events: import('@deepseek-ai/dsh-session').SessionEvent[] })
-      case 'hub/inspect':
-        return this.handleInspect(params as { id: SessionId })
-      case 'hub/delete':
-        return this.handleDelete(params as { id: SessionId })
-      case 'hub/agent/message':
-        return this.handleAgentMessage(params as { id: SessionId; message: UserMessage; mode?: 'queue' | 'steer' })
-      case 'hub/agent/cancel':
-        return this.handleAgentCancel(params as { id: SessionId; cause?: 'user' | 'shutdown' | 'remote' })
       case 'hub/subscribe':
         return this.handleSubscribe(client, params)
       case 'hub/unsubscribe':
@@ -247,18 +192,6 @@ export class HubServer {
       default:
         throw new Error(`unknown hub method: ${method}`)
     }
-  }
-
-  private async handleSubagent(method: 'list' | 'history' | 'prompt' | 'interrupt', params: Record<string, unknown>): Promise<unknown> {
-    const api = this.ctx.get('apiProxy') as {
-      subagents?: Record<string, (request: unknown, signal?: AbortSignal) => Promise<{ result: unknown }>>
-    } | undefined
-    const operation = api?.subagents?.[method]
-    if (operation === undefined) throw new Error('remote subagent API is unavailable')
-    const response = await operation({ rpcId: `hub-subagent-${method}-${Date.now()}`, payload: params })
-    const result = response.result as { ok?: boolean; value?: unknown; error?: unknown }
-    if (result.ok !== true) throw new Error(typeof result.error === 'string' ? result.error : `remote subagent ${method} failed`)
-    return result.value
   }
 
   private handleHandshake(client: ClientRecord, params: HubHandshakeParams): HubHandshakeResult {
@@ -333,7 +266,7 @@ export class HubServer {
   }
 
   /** List directories registered by the remote device's workspace service. */
-  private async handleWorkspaces(): Promise<import('@deepseek-ai/dsh-hub-protocol').HubWorkspaceListResult> {
+  private async handleWorkspaces(params: { workspaceIds?: string[] } = {}): Promise<import('@deepseek-ai/dsh-hub-protocol').HubWorkspaceListResult> {
     const registry = this.ctx.get('workspaceRegistry') as {
       list: () => Array<{ id: string; title: string; path: string; sessionIds: SessionId[] }>
       archivedSessionIds: readonly SessionId[]
@@ -385,9 +318,10 @@ export class HubServer {
         : summary] as const
     })))
     const archived = new Set(registry?.archivedSessionIds ?? [])
+    const selected = params.workspaceIds === undefined ? undefined : new Set(params.workspaceIds)
     return {
       endpointId: this.config.endpointId,
-      workspaces: registry?.list().map(workspace => ({
+      workspaces: registry?.list().filter(workspace => selected === undefined || selected.has(workspace.id)).map(workspace => ({
         id: workspace.id,
         title: workspace.title,
         path: workspace.path,
@@ -413,360 +347,22 @@ export class HubServer {
     }
   }
 
-  private async handleWorkspaceSessionCreate(params: { workspaceId: string }): Promise<{ sessionId: SessionId }> {
-    const api = this.ctx.get('apiProxy') as {
-      sessions: {
-        create: (request: { rpcId: string; payload: { workspaceId: string } }) => Promise<{
-          result: { ok: true; value: { sessionId: SessionId } } | { ok: false; error: unknown }
-        }>
-      }
-    } | undefined
-    if (api === undefined) throw new Error('remote api proxy is unavailable')
-    const agentPreset = this.config.workspacePresets[params.workspaceId]
-    const response = await api.sessions.create({
-      rpcId: `hub-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      payload: {
-        workspaceId: params.workspaceId,
-        ...(agentPreset === undefined ? {} : { agentPreset }),
-      },
-    })
-    if (!response.result.ok) throw new Error(`remote session creation failed: ${JSON.stringify(response.result.error)}`)
-    return response.result.value
-  }
-
-  private async handleWorkspaceRename(params: { workspaceId: string; title: string }): Promise<Record<string, unknown>> {
-    const api = this.ctx.get('apiProxy') as { workspace?: { rename: (request: unknown) => Promise<{ result: { ok: true; value: Record<string, unknown> } | { ok: false; error: unknown } }> } } | undefined
-    const response = await api?.workspace?.rename({ rpcId: `hub-workspace-rename-${randomUUID()}`, payload: params })
-    if (response?.result.ok !== true) throw new Error(`remote workspace rename failed: ${JSON.stringify(response?.result.error)}`)
-    return response.result.value
-  }
-
-  private async handleWorkspaceDelete(params: { workspaceId: string }): Promise<{ deleted: boolean }> {
-    const api = this.ctx.get('apiProxy') as { workspace?: { delete: (request: unknown) => Promise<{ result: { ok: true; value: { deleted: boolean } } | { ok: false; error: unknown } }> } } | undefined
-    const response = await api?.workspace?.delete({ rpcId: `hub-workspace-delete-${randomUUID()}`, payload: params })
-    if (response?.result.ok !== true) throw new Error(`remote workspace delete failed: ${JSON.stringify(response?.result.error)}`)
-    return response.result.value
-  }
-
-  private async handleWorkspaceInsertBefore(params: { workspaceId: string; beforeWorkspaceId?: string }): Promise<Record<string, unknown>> {
-    const api = this.ctx.get('apiProxy') as { workspace?: { insertBefore: (request: unknown) => Promise<{ result: { ok: true; value: Record<string, unknown> } | { ok: false; error: unknown } }> } } | undefined
-    const response = await api?.workspace?.insertBefore({ rpcId: `hub-workspace-order-${randomUUID()}`, payload: params })
-    if (response?.result.ok !== true) throw new Error(`remote workspace reorder failed: ${JSON.stringify(response?.result.error)}`)
-    return response.result.value
-  }
-
-  private async handleWorkspaceInsertSessionBefore(params: {
-    workspaceId: string
-    sessionId: SessionId
-    beforeSessionId?: SessionId
-  }): Promise<Record<string, unknown>> {
-    const api = this.ctx.get('apiProxy') as {
-      workspace?: {
-        insertSessionBefore: (request: unknown) => Promise<{
-          result: { ok: true; value: Record<string, unknown> } | { ok: false; error: unknown }
-        }>
-      }
-    } | undefined
-    const response = await api?.workspace?.insertSessionBefore({
-      rpcId: `hub-session-order-${randomUUID()}`,
-      payload: params,
-    })
-    if (response?.result.ok !== true) throw new Error(`remote session reorder failed: ${JSON.stringify(response?.result.error)}`)
-    return response.result.value
-  }
-
-  private async handleSessionModels(
-    params: { id: SessionId },
-  ): Promise<Record<string, unknown>> {
-    const api = this.ctx.get('apiProxy') as {
-      sessions: {
-        models: (request: { rpcId: string; payload: { sessionId: SessionId } }) => Promise<{
-          result: { ok: true; value: Record<string, unknown> } | { ok: false; error: unknown }
-        }>
-      }
-    } | undefined
-    if (api === undefined) throw new Error('remote api proxy is unavailable')
-    const response = await api.sessions.models({
-      rpcId: `hub-models-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      payload: { sessionId: params.id },
-    })
-    if (!response.result.ok) {
-      throw new Error(`remote model listing failed: ${JSON.stringify(response.result.error)}`)
-    }
-    return response.result.value
-  }
-
-  private async handleSessionSelectModel(
-    params: { id: SessionId; provider: string; model: string; reasoningEffort?: string },
-  ): Promise<{ selected: { provider: string; model: string; reasoningEffort?: string } }> {
-    const api = this.ctx.get('apiProxy') as {
-      sessions: {
-        selectModel: (request: {
-          rpcId: string
-          payload: { sessionId: SessionId; provider: string; model: string; reasoningEffort?: string }
-        }) => Promise<{
-          result: { ok: true; value: { selected: { provider: string; model: string; reasoningEffort?: string } } }
-            | { ok: false; error: unknown }
-        }>
-      }
-    } | undefined
-    if (api === undefined) throw new Error('remote api proxy is unavailable')
-    const response = await api.sessions.selectModel({
-      rpcId: `hub-select-model-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      payload: {
-        sessionId: params.id,
-        provider: params.provider,
-        model: params.model,
-        ...(params.reasoningEffort === undefined ? {} : { reasoningEffort: params.reasoningEffort }),
-      },
-    })
-    if (!response.result.ok) throw new Error(`remote model selection failed: ${JSON.stringify(response.result.error)}`)
-    return response.result.value
-  }
-
-  private async handleSessionRename(params: { id: SessionId; title: string }): Promise<{ title: string; seq: number }> {
-    const api = this.ctx.get('apiProxy') as { sessions: { rename: (request: { rpcId: string; payload: { sessionId: SessionId; title: string } }) => Promise<{ result: { ok: true; value: { title: string; seq: number } } | { ok: false; error: unknown } }> } }
-    const response = await api.sessions.rename({ rpcId: `hub-rename-${randomUUID()}`, payload: { sessionId: params.id, title: params.title } })
-    if (!response.result.ok) throw new Error(`remote session rename failed: ${JSON.stringify(response.result.error)}`)
-    return response.result.value
-  }
-
-  private async handleSessionUpdateQueue(params: { id: SessionId; itemId: string; action: never }): Promise<{ accepted: true }> {
-    const api = this.ctx.get('apiProxy') as { sessions: { updateQueue: (request: { rpcId: string; payload: { sessionId: SessionId; itemId: string; action: never } }) => Promise<{ result: { ok: true; value: { accepted: true } } | { ok: false; error: unknown } }> } }
-    const response = await api.sessions.updateQueue({ rpcId: `hub-queue-${randomUUID()}`, payload: { sessionId: params.id, itemId: params.itemId, action: params.action } })
-    if (!response.result.ok) throw new Error(`remote queue update failed: ${JSON.stringify(response.result.error)}`)
-    return response.result.value
-  }
-
-  private async handleSessionAttachment(
-    params: { id: SessionId; attachmentId: string },
-  ): Promise<{ attachment: unknown; data: string }> {
-    const api = this.ctx.get('apiProxy') as {
-      sessions: {
-        attachment: (request: {
-          rpcId: string
-          payload: { sessionId: SessionId; attachmentId: string }
-        }) => Promise<{
-          result: { ok: true; value: { attachment: unknown; data: string } }
-            | { ok: false; error: unknown }
-        }>
-      }
-    }
-    const response = await api.sessions.attachment({ rpcId: `hub-attachment-${randomUUID()}`, payload: { sessionId: params.id, attachmentId: params.attachmentId } })
-    if (!response.result.ok) throw new Error(`remote attachment read failed: ${JSON.stringify(response.result.error)}`)
-    return response.result.value
-  }
-
-  private async handleSessionFork(
-    params: { id: SessionId; atSeq?: number },
-  ): Promise<{ sessionId: SessionId }> {
-    const api = this.ctx.get('apiProxy') as {
-      sessions: {
-        fork: (request: {
-          rpcId: string
-          payload: { sessionId: SessionId; atSeq?: number }
-        }) => Promise<{
-          result: { ok: true; value: { sessionId: SessionId } }
-            | { ok: false; error: unknown }
-        }>
-      }
-    }
-    const response = await api.sessions.fork({ rpcId: `hub-fork-${randomUUID()}`, payload: { sessionId: params.id, ...(params.atSeq === undefined ? {} : { atSeq: params.atSeq }) } })
-    if (!response.result.ok) throw new Error(`remote session fork failed: ${JSON.stringify(response.result.error)}`)
-    return response.result.value
-  }
-
-  private async handleWorkspaceArchiveSession(params: { id: SessionId }): Promise<{ archivedSessionIds: SessionId[] }> {
-    const api = this.ctx.get('apiProxy') as {
-      workspace: {
-        archiveSession: (request: { rpcId: string; payload: { sessionId: SessionId } }) => Promise<{
-          result: { ok: true; value: { archivedSessionIds: SessionId[] } } | { ok: false; error: unknown }
-        }>
-      }
-    } | undefined
-    if (api === undefined) throw new Error('remote workspace API is unavailable')
-    const response = await api.workspace.archiveSession({ rpcId: `hub-archive-${randomUUID()}`, payload: { sessionId: params.id } })
-    if (!response.result.ok) throw new Error(`remote session archive failed: ${JSON.stringify(response.result.error)}`)
-    return response.result.value
-  }
-
-  private async handleSessionHistory(params: { id: SessionId; beforeSeq?: number; maxMessages?: number }): Promise<unknown> {
-    const api = this.ctx.get('apiProxy') as {
-      sessions?: {
-        history: (request: {
-          rpcId: string
-          payload: { sessionId: SessionId; beforeSeq?: number; maxMessages?: number }
-        }) => Promise<{ result: unknown }>
-      }
-    } | undefined
-    const history = api?.sessions?.history
-    if (history === undefined) throw new Error('remote session history API is unavailable')
-    const response = await history({
-      rpcId: `hub-session-history-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      payload: {
-        sessionId: params.id,
-        ...(params.beforeSeq === undefined ? {} : { beforeSeq: params.beforeSeq }),
-        ...(params.maxMessages === undefined ? {} : { maxMessages: params.maxMessages }),
-      },
-    })
-    const result = response.result as { ok?: boolean; value?: unknown; error?: unknown }
-    if (result.ok !== true) throw new Error(typeof result.error === 'string' ? result.error : `remote session history failed: ${JSON.stringify(result.error)}`)
-    return result.value
-  }
-
   /** Forward a typed Host API request without changing its result payload. */
   private async handleApiRequest(params: { method: string; payload: Record<string, unknown> }): Promise<unknown> {
-    if (params.method !== 'sessions.history') throw new Error(`unsupported remote API method: ${params.method}`)
-    const api = this.ctx.get('apiProxy') as {
-      sessions?: {
-        history: (request: {
-          rpcId: string
-          payload: { sessionId: SessionId; beforeSeq?: number; maxMessages?: number }
-        }) => Promise<unknown>
-      }
-    } | undefined
-    const history = api?.sessions?.history
-    if (history === undefined) throw new Error('remote session history API is unavailable')
-    return await history({
-      rpcId: `hub-api-${randomUUID()}`,
-      payload: {
-        sessionId: params.payload.sessionId as SessionId,
-        ...(params.payload.beforeSeq === undefined ? {} : { beforeSeq: params.payload.beforeSeq as number }),
-        ...(params.payload.maxMessages === undefined ? {} : { maxMessages: params.payload.maxMessages as number }),
-      },
-    })
-  }
-
-  private async handleSessionPrompt(params: { id: SessionId; content: unknown[]; mode: 'queue' | 'steer'; clientTimeZone?: string }): Promise<{ accepted: true }> {
-    const api = this.ctx.get('apiProxy') as {
-      sessions?: {
-        prompt: (request: { rpcId: string; payload: { sessionId: SessionId; content: unknown[]; mode: 'queue' | 'steer'; clientTimeZone?: string } }) => Promise<{ result: { ok: true; value: unknown } | { ok: false; error: unknown } }>
-      }
-    } | undefined
-    const prompt = api?.sessions?.prompt
-    if (prompt === undefined) throw new Error('remote session prompt API is unavailable')
-    const response = await prompt({
-      rpcId: `hub-session-prompt-${randomUUID()}`,
-      payload: {
-        sessionId: params.id,
-        content: params.content,
-        mode: params.mode,
-        ...(params.clientTimeZone === undefined ? {} : { clientTimeZone: params.clientTimeZone }),
-      },
-    })
-    if (!response.result.ok) throw new Error(`remote session prompt failed: ${JSON.stringify(response.result.error)}`)
-    return { accepted: true }
-  }
-
-  private async handleCreate(
-    params: { meta: import('@deepseek-ai/dsh-session').SessionHeader },
-  ): Promise<{ id: SessionId }> {
-    const persistence = this.ctx.get('sessionPersistence')
-    if (persistence !== undefined) {
-      await persistence.create(params.meta)
-    }
-    return { id: params.meta.id }
-  }
-
-  private async handleLoad(
-    params: { id: SessionId },
-  ): Promise<{ meta: import('@deepseek-ai/dsh-session').SessionHeader; events: import('@deepseek-ai/dsh-session').SessionEvent[] }> {
-    // A live session is authoritative while its write-behind persistence has
-    // not flushed the first event yet. This also keeps a newly created remote
-    // workspace session readable immediately after creation.
-    const live = this.ctx.sessions.get(params.id)
-    if (live !== undefined) {
-      return { meta: live.header, events: [...live.events] }
-    }
-    const persistence = this.ctx.get('sessionPersistence')
-    if (persistence === undefined) {
-      const session = this.ctx.sessions.get(params.id)
-      if (session === undefined) throw new Error(`session not found: ${params.id}`)
-      return { meta: session.header, events: [...session.events] }
-    }
-    try {
-      const result = await persistence.load(params.id)
-      return { meta: result.meta, events: [...result.events] }
-    } catch (error) {
-      throw error
-    }
-  }
-
-  private async handleAppend(
-    params: { id: SessionId; events: import('@deepseek-ai/dsh-session').SessionEvent[] },
-  ): Promise<Record<string, never>> {
-    const persistence = this.ctx.get('sessionPersistence')
-    if (persistence !== undefined) {
-      await persistence.append(params.id, params.events)
-    }
-    return {}
-  }
-
-  private async handleInspect(
-    params: { id: SessionId },
-  ): Promise<{ meta: import('@deepseek-ai/dsh-session').SessionHeader; events: import('@deepseek-ai/dsh-session').SessionEvent[] }> {
-    const live = this.ctx.sessions.get(params.id)
-    if (live !== undefined) {
-      return { meta: live.header, events: [...live.events] }
-    }
-    const persistence = this.ctx.get('sessionPersistence')
-    if (persistence === undefined) {
-      const session = this.ctx.sessions.get(params.id)
-      if (session === undefined) throw new Error(`session not found: ${params.id}`)
-      return { meta: session.header, events: [...session.events] }
-    }
-    try {
-      const result = await persistence.inspect(params.id)
-      return { meta: result.meta, events: [...result.events] }
-    } catch (error) {
-      throw error
-    }
-  }
-
-  private handleDelete(params: { id: SessionId }): Record<string, never> {
-    throw new Error(`session deletion is not supported: ${params.id}`)
-  }
-
-  private async handleAgentMessage(
-    params: { id: SessionId; message: UserMessage; mode?: 'queue' | 'steer' },
-  ): Promise<{ accepted: true }> {
-    const api = this.ctx.get('apiProxy') as {
-      sessions: {
-        prompt: (request: { rpcId: string; payload: { sessionId: SessionId; mode: 'queue' | 'steer'; content: UserMessage['content'] } }) => Promise<{
-          result: { ok: true; value: { accepted: true } } | { ok: false; error: unknown }
-        }>
-      }
-    } | undefined
-    if (api === undefined) throw new Error('remote api proxy is unavailable')
-    const response = await api.sessions.prompt({
-      rpcId: `hub-agent-message-${randomUUID()}`,
-      payload: {
-        sessionId: params.id,
-        mode: params.mode ?? 'queue',
-        content: params.message.content,
-      },
-    })
-    if (!response.result.ok) throw new Error(`remote prompt failed: ${JSON.stringify(response.result.error)}`)
-    return response.result.value
-  }
-
-  private async handleAgentCancel(
-    params: { id: SessionId; cause?: 'user' | 'shutdown' | 'remote' },
-  ): Promise<Record<string, never>> {
-    const api = this.ctx.get('apiProxy') as {
-      sessions: {
-        cancel: (request: { rpcId: string; payload: { sessionId: SessionId } }) => Promise<{
-          result: { ok: true; value: Record<string, never> } | { ok: false; error: unknown }
-        }>
-      }
-    } | undefined
-    if (api === undefined) throw new Error('remote api proxy is unavailable')
-    const response = await api.sessions.cancel({
-      rpcId: `hub-agent-cancel-${randomUUID()}`,
-      payload: { sessionId: params.id },
-    })
-    if (!response.result.ok) throw new Error(`remote cancel failed: ${JSON.stringify(response.result.error)}`)
-    return response.result.value
+    const allowed = new Set([
+      'session.list', 'session.create', 'session.history', 'session.models', 'session.selectModel',
+      'session.rename', 'session.fork', 'session.prompt', 'session.attachment', 'session.updateQueue',
+      'session.cancel', 'subagent.list', 'subagent.history', 'subagent.prompt', 'subagent.interrupt',
+      'workspace.rename', 'workspace.delete', 'workspace.insertBefore', 'workspace.insertSessionBefore',
+      'workspace.archiveSession',
+    ])
+    if (!allowed.has(params.method)) throw new Error(`unsupported remote API method: ${params.method}`)
+    const [domain, operation] = params.method.split('.')
+    const apiDomain = domain === 'session' ? 'sessions' : domain === 'subagent' ? 'subagents' : domain === 'agentPreset' ? 'agentPresets' : domain
+    const api = this.ctx.get('apiProxy') as Record<string, Record<string, (request: unknown) => Promise<unknown>>> | undefined
+    const handler = apiDomain === undefined || operation === undefined ? undefined : api?.[apiDomain]?.[operation]
+    if (handler === undefined) throw new Error(`remote API method is unavailable: ${params.method}`)
+    return await handler({ rpcId: `hub-api-${randomUUID()}`, payload: params.payload })
   }
 
   private handleSubscribe(

@@ -7,9 +7,7 @@
 
 import WebSocket from 'ws'
 import { Context } from '@deepseek-ai/cordis'
-import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
-import type { SessionEvent, SessionId, SessionHeader } from '@deepseek-ai/dsh-session'
-import type { SessionInspection, SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persistence'
+import type { SessionId } from '@deepseek-ai/dsh-session'
 import {
   JsonRpcWebSocketTransport,
   type JsonRpcTransportPeer,
@@ -27,39 +25,6 @@ export class HubConnectionError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'HubConnectionError'
-  }
-}
-
-/** Remote Agent command surface used by a local Web/API adapter. */
-export class RemoteAgentClient {
-  constructor(private readonly provider: RemoteSessionProvider) {}
-
-  /** Queue one text prompt on the remote Agent. */
-  async sendText(sessionId: SessionId, text: string, mode: 'queue' | 'steer' = 'queue'): Promise<void> {
-    await this.sendMessage(sessionId, createUserMessage({
-      content: [{ type: 'text', text }],
-      source: { kind: 'user' },
-    }), mode)
-  }
-
-  /** Queue one already normalized user message on the remote Agent. */
-  async send(sessionId: SessionId, message: UserMessage): Promise<void> {
-    await this.sendMessage(sessionId, message, 'queue')
-  }
-
-  /** Queue or steer one user message on the remote Agent. */
-  async sendMessage(sessionId: SessionId, message: UserMessage, mode: 'queue' | 'steer'): Promise<void> {
-    await this.provider.request('hub/agent/message', { id: sessionId, message, mode })
-  }
-
-  /** Cancel the remote Agent's active turn. */
-  async cancel(sessionId: SessionId): Promise<void> {
-    await this.provider.request('hub/agent/cancel', { id: sessionId, cause: 'user' })
-  }
-
-  /** Forward remote session events to a host API event carrier. */
-  onEvent(listener: (notification: HubEventNotification) => void): () => void {
-    return this.provider.onEvent(listener)
   }
 }
 
@@ -274,72 +239,4 @@ export class RemoteSessionProvider {
     return this.transport
   }
 
-  // ── SessionPersistence implementation ─────────────────────────────
-
-  locate(_meta: SessionHeader): { kind: string; path: string } | undefined {
-    // Remote sessions have no local artifact path.
-    return undefined
-  }
-
-  readonly supportsRawArtifacts = false
-
-  async create(meta: SessionHeader): Promise<void> {
-    const transport = this.ensureConnected()
-    await transport.request('hub/create', { meta })
-  }
-
-  async append(id: SessionId, events: readonly SessionEvent[]): Promise<void> {
-    const transport = this.ensureConnected()
-    await transport.request('hub/append', { id, events: [...events] })
-  }
-
-  async load(id: SessionId): Promise<SessionInspection> {
-    const transport = this.ensureConnected()
-    const result = await transport.request('hub/load', { id }) as {
-      meta: SessionHeader
-      events: SessionEvent[]
-    }
-    return { meta: result.meta, events: result.events }
-  }
-
-  async inspect(id: SessionId, _signal?: AbortSignal): Promise<SessionInspection> {
-    const transport = this.ensureConnected()
-    const result = await transport.request('hub/inspect', { id }) as {
-      meta: SessionHeader
-      events: SessionEvent[]
-    }
-    return { meta: result.meta, events: result.events }
-  }
-
-  async readFrom(
-    id: SessionId,
-    fromSeq: number,
-    _signal?: AbortSignal,
-  ): Promise<{ meta: SessionHeader; events: SessionEvent[] }> {
-    // Load the full session and filter by seq.
-    const loaded = await this.load(id)
-    return {
-      meta: loaded.meta,
-      events: loaded.events.filter(e => e.seq >= fromSeq),
-    }
-  }
-
-  async list(_signal?: AbortSignal): Promise<SessionHeader[]> {
-    const transport = this.ensureConnected()
-    const result = await transport.request('hub/list', {}) as {
-      sessions: { header: SessionHeader }[]
-    }
-    return result.sessions.map(s => s.header)
-  }
-
-  async listSnapshots(_signal?: AbortSignal): Promise<SessionPersistenceSnapshot[]> {
-    const transport = this.ensureConnected()
-    const result = await transport.request('hub/list', {}) as {
-      sessions: { header: SessionHeader }[]
-    }
-    return result.sessions.map(s => ({
-      header: s.header,
-      revision: { kind: 'remote', seq: s.header.createdAt } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistenceRevision,
-    }))
-  }
 }
