@@ -7,7 +7,6 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
-import type { HubWorkspaceListResult } from '@deepseek-ai/dsh-hub-protocol'
 import { RemoteSessionProvider } from './remote-session-provider.ts'
 
 export { RemoteAgentClient, RemoteSessionProvider, HubConnectionError } from './remote-session-provider.ts'
@@ -128,47 +127,6 @@ export function apply(ctx: Context, config: HubClientConfig): void {
       },
     })
     ctx.effect(() => configDispose, 'hub-client.webServer.config')
-    const workspacesDispose = webServer.register({
-      kind: 'exact',
-      path: '/api/hub/workspaces',
-      handler: (_req: unknown, res: unknown) => {
-        const response = res as { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void }
-        void provider.request('hub/workspaces', {}).then((result) => {
-          response.writeHead(200, { 'Content-Type': 'application/json' })
-          const workspaces = result as HubWorkspaceListResult
-          response.end(JSON.stringify({ ...workspaces, endpointId: provider.connectedServerInfo?.endpointId ?? workspaces.endpointId }))
-        }).catch((error) => {
-          response.writeHead(502, { 'Content-Type': 'application/json' })
-          response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
-        })
-      },
-    })
-    ctx.effect(() => workspacesDispose, 'hub-client.webServer.workspaces')
-    const createWorkspaceSessionDispose = webServer.register({
-      kind: 'exact',
-      path: '/api/hub/workspace-session/create',
-      handler: async (req: unknown, res: unknown) => {
-        const request = req as { method?: string; url?: string }
-        const response = res as { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void }
-        const workspaceId = request.url === undefined
-          ? undefined
-          : new URL(request.url, 'http://localhost').searchParams.get('workspaceId') ?? undefined
-        if (request.method !== 'GET' || workspaceId === undefined) {
-          response.writeHead(400, { 'Content-Type': 'application/json' })
-          response.end(JSON.stringify({ error: 'workspaceId is required' }))
-          return
-        }
-        try {
-          const result = await provider.request('hub/workspace-session/create', { workspaceId })
-          response.writeHead(200, { 'Content-Type': 'application/json' })
-          response.end(JSON.stringify(result))
-        } catch (error) {
-          response.writeHead(502, { 'Content-Type': 'application/json' })
-          response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
-        }
-      },
-    })
-    ctx.effect(() => createWorkspaceSessionDispose, 'hub-client.webServer.workspace-session-create')
     const sessionStreamDispose = webServer.register({
       kind: 'exact',
       path: '/api/hub/session/stream',
@@ -204,6 +162,23 @@ export function apply(ctx: Context, config: HubClientConfig): void {
       },
     })
     ctx.effect(() => sessionStreamDispose, 'hub-client.webServer.session-stream')
+    const hostStreamDispose = webServer.register({
+      kind: 'exact',
+      path: '/api/hub/host/stream',
+      handler: (_req: unknown, res: unknown) => {
+        const response = res as {
+          writeHead: (code: number, headers: Record<string, string>) => void
+          write: (body: string) => void
+          end: () => void
+          on?: (event: string, listener: () => void) => void
+        }
+        response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
+        response.write(': connected\n\n')
+        const unsubscribe = provider.onHostFrame(notification => response.write(`data: ${JSON.stringify(notification)}\n\n`))
+        response.on?.('close', () => { unsubscribe(); response.end() })
+      },
+    })
+    ctx.effect(() => hostStreamDispose, 'hub-client.webServer.host-stream')
   }
 
   // Auto-connect if configured.

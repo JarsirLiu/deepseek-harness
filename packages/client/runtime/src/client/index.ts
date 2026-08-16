@@ -201,6 +201,10 @@ export function apply(ctx: Context): void {
     () => workspaces.startInitialSelection(),
     'runtime: initial Workspace selection',
   )
+  ctx.effect(() => () => {
+    workspaces.dispose()
+    sessions.dispose()
+  }, 'runtime: remote projection cleanup')
   const loop = connection.start({
     onMuxEnvelope: (envelope) => {
       sessions.handleMuxEnvelope(envelope)

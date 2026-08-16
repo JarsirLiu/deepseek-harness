@@ -8,6 +8,7 @@
 
 import type { SessionEvent, SessionId, SessionHeader } from '@deepseek-ai/dsh-session'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
+import type { HostFrame } from '@deepseek-ai/dsh-host-apiproxy/api'
 
 // ── Session operations ─────────────────────────────────────────────
 
@@ -177,6 +178,14 @@ export interface HubEventNotification {
   event: SessionEvent
 }
 
+/** One official api.events.host frame forwarded by the owning Hub. */
+export interface HubHostNotification {
+  /** Stable endpoint identity assigned by the publishing Hub. */
+  endpointId: `remote:${string}`
+  /** The unchanged payload emitted by api.events.host. */
+  frame: HostFrame
+}
+
 /** A session status notification. */
 export interface HubStatusNotification {
   /** Stable endpoint identity assigned by the publishing Hub. */
@@ -239,6 +248,7 @@ export interface HubStatusResponse {
 /** Server-to-client notifications. */
 export interface HubNotificationMap {
   'hub/event': HubEventNotification
+  'hub/host': HubHostNotification
   'hub/status': HubStatusNotification
 }
 
@@ -248,12 +258,17 @@ export interface HubRequestMap {
   'hub/list': { params: HubListParams; result: HubListResult }
   'hub/workspaces': { params: Record<string, never>; result: HubWorkspaceListResult }
   'hub/workspace-session/create': { params: HubWorkspaceSessionCreateParams; result: HubWorkspaceSessionCreateResult }
+  'hub/workspace/rename': { params: { workspaceId: string; title: string }; result: Record<string, unknown> }
+  'hub/workspace/delete': { params: { workspaceId: string }; result: { deleted: boolean } }
+  'hub/workspace/insert-before': { params: { workspaceId: string; beforeWorkspaceId?: string }; result: Record<string, unknown> }
+  'hub/workspace/insert-session-before': { params: { workspaceId: string; sessionId: SessionId; beforeSessionId?: SessionId }; result: Record<string, unknown> }
   'hub/session/models': { params: { id: SessionId }; result: Record<string, unknown> }
   'hub/session/select-model': { params: { id: SessionId } & HubSessionModelSelection; result: { selected: HubSessionModelSelection } }
   'hub/session/rename': { params: { id: SessionId; title: string }; result: { title: string; seq: number } }
   'hub/session/update-queue': { params: { id: SessionId; itemId: string; action: unknown }; result: { accepted: true } }
   'hub/session/attachment': { params: { id: SessionId; attachmentId: string }; result: { attachment: unknown; data: string } }
   'hub/session/fork': { params: { id: SessionId; atSeq?: number }; result: { sessionId: SessionId } }
+  'hub/workspace/archive-session': { params: { id: SessionId }; result: { archivedSessionIds: SessionId[] } }
   'hub/subagent/list': { params: HubSubagentListParams; result: Record<string, unknown> }
   'hub/subagent/history': { params: HubSubagentAddress & { beforeSeq?: number; maxMessages?: number }; result: Record<string, unknown> }
   'hub/subagent/prompt': { params: HubSubagentAddress & { content: unknown[] }; result: Record<string, unknown> }

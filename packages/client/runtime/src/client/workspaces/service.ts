@@ -2,10 +2,10 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type {
-  DirectoryListing, IApiClient, RpcError,
+  DirectoryListing, HostFrame, IApiClient, RpcError,
   SessionId, WorkspaceId, WorkspaceView,
 } from '@deepseek-ai/dsh-api-remotes/client'
-import { qualifiedSessionId, REMOTE_WORKSPACE_SOURCE, type RemoteWorkspace, type RemoteWorkspaceSource } from '@deepseek-ai/dsh-hub-web-adapter'
+import { parseQualifiedSessionId, qualifiedSessionId, REMOTE_SESSION_REGISTRY, REMOTE_WORKSPACE_SOURCE, type RemoteSessionTransportRegistry, type RemoteWorkspace, type RemoteWorkspaceSource } from '@deepseek-ai/dsh-hub-web-adapter'
 import type { SnapshotStore } from '../contract/store.ts'
 import { createSnapshotStore } from '../contract/store.ts'
 import type { SessionsPort, SessionsPortList } from '../contract/sessions-port.ts'
@@ -62,6 +62,7 @@ export class WorkspaceRuntime implements IWorkspaces {
   private remoteError: RpcError | null = null
   private remoteReady = false
   private readonly remoteById = new Map<WorkspaceId, RemoteWorkspace>()
+  private readonly remoteHostSubscriptions = new Map<`remote:${string}`, () => void>()
   /** Guards the runtime-owned one-shot initial-selection subscription. */
   private initialSelectionStarted = false
 
@@ -282,7 +283,12 @@ export class WorkspaceRuntime implements IWorkspaces {
    * @returns the renamed Workspace view.
    */
   async rename(workspaceId: WorkspaceId, title: string): Promise<WorkspaceView> {
-    this.assertLocalWorkspace(workspaceId, 'rename')
+    const remote = this.remoteById.get(workspaceId)
+    if (remote !== undefined) {
+      const updated = await this.getRemoteSourceOrThrow().rename(remote, title)
+      await this.refreshRemote()
+      return toRemoteWorkspaceView(updated)
+    }
     const result = await this.manager.rename(workspaceId, title)
     if (!result.ok) throw new Error(`workspace rename failed: ${result.error.code}: ${result.error.message}`)
     return result.value.workspace
@@ -294,7 +300,12 @@ export class WorkspaceRuntime implements IWorkspaces {
    * @param workspaceId - target workspace.
    */
   async delete(workspaceId: WorkspaceId): Promise<void> {
-    this.assertLocalWorkspace(workspaceId, 'delete')
+    const remote = this.remoteById.get(workspaceId)
+    if (remote !== undefined) {
+      await this.getRemoteSourceOrThrow().delete(remote)
+      await this.refreshRemote()
+      return
+    }
     const result = await this.manager.delete(workspaceId)
     if (!result.ok) throw new Error(`workspace delete failed: ${result.error.code}: ${result.error.message}`)
   }
@@ -305,8 +316,15 @@ export class WorkspaceRuntime implements IWorkspaces {
    * @param beforeWorkspaceId - Anchor workspace; omitted appends.
    */
   async insertBefore(workspaceId: WorkspaceId, beforeWorkspaceId?: WorkspaceId): Promise<void> {
-    this.assertLocalWorkspace(workspaceId, 'reorder')
-    if (beforeWorkspaceId !== undefined) this.assertLocalWorkspace(beforeWorkspaceId, 'reorder')
+    const remote = this.remoteById.get(workspaceId)
+    if (remote !== undefined) {
+      const before = beforeWorkspaceId === undefined ? undefined : this.remoteById.get(beforeWorkspaceId)
+      if (beforeWorkspaceId !== undefined && before === undefined) throw new Error(`remote workspace ${String(beforeWorkspaceId)} is unavailable`)
+      await this.getRemoteSourceOrThrow().insertBefore(remote, before)
+      await this.refreshRemote()
+      return
+    }
+    if (beforeWorkspaceId !== undefined && this.remoteById.has(beforeWorkspaceId)) throw new Error('cannot reorder a local workspace before a remote workspace')
     const result = await this.manager.insertBefore(workspaceId, beforeWorkspaceId)
     if (!result.ok) throw new Error(`workspace reorder failed: ${result.error.code}: ${result.error.message}`)
   }
@@ -318,7 +336,11 @@ export class WorkspaceRuntime implements IWorkspaces {
    * @param sessionId - session to archive.
    */
   async archiveSession(sessionId: SessionId): Promise<void> {
-    const result = await this.manager.archiveSession(sessionId)
+    const ref = parseQualifiedSessionId(sessionId)
+    const registry = this.ctx.get(REMOTE_SESSION_REGISTRY) as RemoteSessionTransportRegistry | undefined
+    const result = ref === undefined
+      ? await this.manager.archiveSession(sessionId)
+      : await registry?.resolve(ref).archiveSession(ref.sessionId) ?? { ok: false, error: { code: 'internal', message: 'remote endpoint unavailable', details: {} } }
     if (!result.ok) throw new Error(`session archive failed: ${result.error.code}: ${result.error.message}`)
   }
 
@@ -334,7 +356,20 @@ export class WorkspaceRuntime implements IWorkspaces {
     sessionId: SessionId,
     beforeSessionId?: SessionId,
   ): Promise<WorkspaceView> {
-    this.assertLocalWorkspace(workspaceId, 'move session')
+    const remote = this.remoteById.get(workspaceId)
+    if (remote !== undefined) {
+      const before = beforeSessionId === undefined
+        ? undefined
+        : unwrapRemoteSessionId(beforeSessionId, remote.endpointId)
+      const updated = await this.getRemoteSourceOrThrow().insertSessionBefore(
+        remote,
+        unwrapRemoteSessionId(sessionId, remote.endpointId),
+        before,
+      )
+      await this.refreshRemote()
+      return toRemoteWorkspaceView(updated)
+    }
+    if (parseQualifiedSessionId(sessionId) !== undefined) throw new Error('cannot move a remote session into a local workspace')
     const result = await this.manager.insertSessionBefore(workspaceId, sessionId, beforeSessionId)
     if (!result.ok) throw new Error(`workspace move failed: ${result.error.code}: ${result.error.message}`)
     return result.value.workspace
@@ -375,6 +410,7 @@ export class WorkspaceRuntime implements IWorkspaces {
     this.project()
     try {
       const remote = await remoteSource.listSelected()
+      this.syncRemoteHostSubscriptions(remote)
       this.remoteById.clear()
       for (const item of remote) this.remoteById.set(remoteWorkspaceId(item), item)
       this.remoteItems = remote.map(toRemoteWorkspaceView)
@@ -390,16 +426,66 @@ export class WorkspaceRuntime implements IWorkspaces {
     this.project()
   }
 
-  /** Reject local Host mutations for workspaces owned by a Hub endpoint. */
-  private assertLocalWorkspace(workspaceId: WorkspaceId, operation: string): void {
-    if (isRemoteWorkspaceId(workspaceId)) {
-      throw new Error(`remote workspace ${String(workspaceId)} does not support local ${operation}`)
+  /** Release endpoint subscriptions owned by the workspace projection. */
+  dispose(): void {
+    for (const dispose of this.remoteHostSubscriptions.values()) dispose()
+    this.remoteHostSubscriptions.clear()
+  }
+
+  /** Keep workspace-owned remote state aligned with endpoint host events. */
+  private syncRemoteHostSubscriptions(workspaces: readonly RemoteWorkspace[]): void {
+    const endpoints = new Set(workspaces.map(workspace => workspace.endpointId))
+    for (const workspace of workspaces) {
+      if (this.remoteHostSubscriptions.has(workspace.endpointId)) continue
+      const transport = (this.ctx.get(REMOTE_SESSION_REGISTRY) as RemoteSessionTransportRegistry | undefined)
+        ?.get(workspace.endpointId)
+      if (transport === undefined) continue
+      this.remoteHostSubscriptions.set(workspace.endpointId, transport.subscribeHost((frame) => {
+        this.handleRemoteHostFrame(frame, workspace.endpointId)
+      }))
+    }
+    for (const [endpointId, dispose] of this.remoteHostSubscriptions) {
+      if (!endpoints.has(endpointId)) {
+        dispose()
+        this.remoteHostSubscriptions.delete(endpointId)
+      }
+    }
+  }
+
+  /** Apply only remote Host events that change the workspace projection. */
+  private handleRemoteHostFrame(frame: HostFrame, endpointId: `remote:${string}`): void {
+    switch (frame.type) {
+      case 'host/archived-sessions-changed':
+        this.manager.handleHostEnvelope({
+          rpcId: 'remote-hub-host' as never,
+          payload: {
+            ...frame,
+            archivedSessionIds: frame.archivedSessionIds.map(sessionId =>
+              qualifiedSessionId({ endpointId, sessionId })),
+          },
+        })
+        return
+      case 'host/session-added':
+      case 'host/session-removed':
+      case 'host/workspace-changed':
+      case 'host/workspace-removed':
+      case 'host/workspace-order-changed':
+        void this.refreshRemote()
+        return
+      default:
+        return
     }
   }
 
   /** Resolve the optional Hub source after sibling plugins have loaded. */
   private getRemoteSource(): RemoteWorkspaceSource | undefined {
     return this.ctx.get(REMOTE_WORKSPACE_SOURCE) as RemoteWorkspaceSource | undefined
+  }
+
+  private getRemoteSourceOrThrow(): RemoteWorkspaceSource {
+    const source = this.getRemoteSource()
+    if (source === undefined) throw new Error('remote workspace source unavailable')
+    return source
   }
 
   private project(): void {
@@ -444,9 +530,13 @@ function remoteWorkspaceId(workspace: RemoteWorkspace): WorkspaceId {
   return `remote:${workspace.endpointId.slice('remote:'.length)}|${workspace.workspaceId}` as WorkspaceId
 }
 
-/** Remote workspace IDs are opaque to the Host and carry their endpoint prefix. */
-function isRemoteWorkspaceId(workspaceId: WorkspaceId): boolean {
-  return String(workspaceId).startsWith('remote:')
+/** Convert a Runtime remote session id back to the owning Host id. */
+function unwrapRemoteSessionId(id: SessionId, endpointId: `remote:${string}`): SessionId {
+  const ref = parseQualifiedSessionId(id)
+  if (ref === undefined || ref.endpointId !== endpointId) {
+    throw new Error(`session ${String(id)} does not belong to remote endpoint ${endpointId}`)
+  }
+  return ref.sessionId
 }
 
 /** Stable tie-breaking follows Host Workspace order. */

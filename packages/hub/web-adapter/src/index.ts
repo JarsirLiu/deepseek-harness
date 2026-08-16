@@ -9,7 +9,7 @@
 
 import type { AttachmentIdType, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { HistoryEntry, MessageId, ModelSelection, MuxFrame, PromptContentPart, QueueAction, RpcResult, SessionId, SessionModels, SubagentAddress, SubagentCatalog } from '@deepseek-ai/dsh-api-remotes/client'
-import type { SessionProjectionsBlock } from '@deepseek-ai/dsh-host-apiproxy/api'
+import type { HostFrame, SessionProjectionsBlock } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { SessionEndpointId, SessionRef } from './endpoint-registry.ts'
 export { SessionEndpointRegistry, parseQualifiedSessionId, qualifiedSessionId, sessionKey } from './endpoint-registry.ts'
 export type { SessionEndpointId, SessionKey, SessionRef } from './endpoint-registry.ts'
@@ -47,6 +47,10 @@ export interface RemoteWorkspaceSource {
   listSelected(): Promise<readonly RemoteWorkspace[]>
   /** Create a session on the owning remote workspace. */
   createSession(workspace: RemoteWorkspace): Promise<SessionId>
+  rename(workspace: RemoteWorkspace, title: string): Promise<RemoteWorkspace>
+  delete(workspace: RemoteWorkspace): Promise<void>
+  insertBefore(workspace: RemoteWorkspace, before?: RemoteWorkspace): Promise<void>
+  insertSessionBefore(workspace: RemoteWorkspace, sessionId: SessionId, beforeSessionId?: SessionId): Promise<RemoteWorkspace>
 }
 
 /** Cordis service key for the optional remote workspace source. */
@@ -89,6 +93,7 @@ export interface RemoteSessionTransport {
     attachmentId: AttachmentIdType,
   ): Promise<RpcResult<{ attachment: ImageAttachmentRef; data: string }>>
   fork(sessionId: SessionId, atSeq?: number): Promise<RpcResult<{ sessionId: SessionId }>>
+  archiveSession(sessionId: SessionId): Promise<RpcResult<{ archivedSessionIds: SessionId[] }>>
   subagentList(parentSessionId: SessionId): Promise<RpcResult<SubagentCatalog>>
   subagentHistory(
     address: SubagentAddress,
@@ -97,6 +102,7 @@ export interface RemoteSessionTransport {
   subagentPrompt(address: Extract<SubagentAddress, { mode: 'continuable' }>, content: PromptContentPart[]): Promise<RpcResult<SubagentPromptReceipt>>
   subagentInterrupt(address: Extract<SubagentAddress, { mode: 'continuable' }>): Promise<RpcResult<SubagentInterruptReceipt>>
   subscribe(sessionId: SessionId, listener: (frame: MuxFrame) => void): () => void
+  subscribeHost(listener: (frame: HostFrame) => void): () => void
 }
 
 /** Registry of independently configured remote endpoint transports. */
@@ -132,6 +138,11 @@ export class RemoteSessionTransportRegistry {
   endpoints(): readonly `remote:${string}`[] {
     return [...this.transports.keys()]
   }
+
+  /** Resolve a registered endpoint before a session exists. */
+  get(endpointId: `remote:${string}`): RemoteSessionTransport | undefined {
+    return this.transports.get(endpointId)
+  }
 }
 
 function failure<T>(response: Response): RpcResult<T> {
@@ -161,14 +172,18 @@ export function createRemoteSessionTransport(endpointId: SessionEndpointId | (()
     get endpointId() { return resolveEndpoint() as `remote:${string}` },
     owns: ref => ref.endpointId === resolveEndpoint(),
     history: async (sessionId, payload) => {
-      const result = await call<RemoteHistoryResponse>('hub/session/history', { id: sessionId, ...payload })
+      const result = await call<{ result: RpcResult<RemoteHistoryResponse> }>('hub/api/request', {
+        method: 'sessions.history',
+        payload: { sessionId, ...payload },
+      })
       if (!result.ok) return result
+      if (!result.value.result.ok) return result.value.result
       return {
         ok: true,
         value: {
-          events: result.value.events,
-          hasMore: result.value.hasMore,
-          ...(result.value.projections === undefined ? {} : { projections: result.value.projections }),
+          events: result.value.result.value.events,
+          hasMore: result.value.result.value.hasMore,
+          ...(result.value.result.value.projections === undefined ? {} : { projections: result.value.result.value.projections }),
         },
       }
     },
@@ -184,6 +199,7 @@ export function createRemoteSessionTransport(endpointId: SessionEndpointId | (()
     updateQueue: (sessionId, itemId, action) => call('hub/session/update-queue', { id: sessionId, itemId, action }),
     readAttachment: (sessionId, attachmentId) => call('hub/session/attachment', { id: sessionId, attachmentId }),
     fork: (sessionId, atSeq) => call('hub/session/fork', { id: sessionId, ...(atSeq === undefined ? {} : { atSeq }) }),
+    archiveSession: sessionId => call('hub/workspace/archive-session', { id: sessionId }),
     subagentList: parentSessionId => call('hub/subagent/list', { parentSessionId }),
     subagentHistory: (address, payload) => call('hub/subagent/history', { ...address, ...payload }),
     subagentPrompt: (address, content) => call('hub/subagent/prompt', { ...address, content }),
@@ -193,6 +209,14 @@ export function createRemoteSessionTransport(endpointId: SessionEndpointId | (()
       source.onmessage = (event) => {
         const notification = JSON.parse(event.data) as { endpointId: `remote:${string}`; event: Record<string, unknown> }
         listener({ type: 'session/event', sessionId, event: notification.event as never, endpointId: notification.endpointId } as RemoteSessionFrame)
+      }
+      return () => source.close()
+    },
+    subscribeHost: (listener) => {
+      const source = new EventSource('/api/hub/host/stream')
+      source.onmessage = (event) => {
+        const notification = JSON.parse(event.data) as { frame: HostFrame }
+        listener(notification.frame)
       }
       return () => source.close()
     },

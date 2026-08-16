@@ -26,6 +26,29 @@ import { remoteSessionTransport, type SessionTransport } from './remotes.ts'
 import type { RemoteSessionTransportRegistry, RemoteWorkspace } from '@deepseek-ai/dsh-hub-web-adapter'
 import { parseQualifiedSessionId, qualifiedSessionId } from '@deepseek-ai/dsh-hub-web-adapter'
 
+function qualifyRemoteHostFrame(frame: HostFrame, endpointId: `remote:${string}`): HostFrame {
+  switch (frame.type) {
+    case 'host/session-added':
+      return {
+        ...frame,
+        sessionId: qualifiedSessionId({ endpointId, sessionId: frame.sessionId }),
+        ...(frame.parentSessionId === undefined ? {} : {
+          parentSessionId: qualifiedSessionId({ endpointId, sessionId: frame.parentSessionId }),
+        }),
+      }
+    case 'host/session-removed':
+      return { ...frame, sessionId: qualifiedSessionId({ endpointId, sessionId: frame.sessionId }) }
+    case 'host/session-status':
+      return { ...frame, sessionId: qualifiedSessionId({ endpointId, sessionId: frame.sessionId }) }
+    case 'host/agent-error':
+      return { ...frame, sessionId: qualifiedSessionId({ endpointId, sessionId: frame.sessionId }) }
+    case 'host/archived-sessions-changed':
+      return { ...frame, archivedSessionIds: frame.archivedSessionIds.map(sessionId => qualifiedSessionId({ endpointId, sessionId })) }
+    default:
+      return frame
+  }
+}
+
 /**
  * List arrival lifecycle, orthogonal to the pull-activity `state` axis:
  * `pending` (no successful pull yet — an empty items array means "nothing
@@ -110,6 +133,7 @@ export class SessionManager {
   private readonly sessions = new Map<SessionId, Session>()
   private readonly remoteSessions = new Map<SessionId, SessionTransport>()
   private readonly remoteSubscriptions = new Map<SessionId, () => void>()
+  private readonly remoteHostSubscriptions = new Map<`remote:${string}`, () => void>()
   /** Pre-instantiation buffer for answerable requests and the queued-turn snapshot, which history
    *  cannot reconstruct on open. Live requests remain until resolution; queue and replay duplicates
    *  compact by identity. Instantiation replays and clears it, while removal drops it. */
@@ -180,6 +204,19 @@ export class SessionManager {
     this.selected = restoredSelection
     if (restoredAddress !== undefined) this.addresses.set(restoredAddress.childSessionId, restoredAddress)
     this.listSnapshotCache = this.buildListSnapshot()
+  }
+
+  /** Release endpoint subscriptions and pending catalog refresh timers. */
+  dispose(): void {
+    for (const dispose of this.remoteSubscriptions.values()) dispose()
+    this.remoteSubscriptions.clear()
+    for (const dispose of this.remoteHostSubscriptions.values()) dispose()
+    this.remoteHostSubscriptions.clear()
+    for (const timer of this.catalogDebounce.values()) clearTimeout(timer)
+    this.catalogDebounce.clear()
+    this.catalogInflight.clear()
+    this.catalogStale.clear()
+    this.openCatalogs.clear()
   }
 
   /** Update the optional endpoint registry when the Hub plugin becomes available. */
@@ -367,6 +404,14 @@ export class SessionManager {
   installRemoteWorkspaces(workspaces: readonly RemoteWorkspace[]): void {
     const next = new Set<SessionId>()
     for (const workspace of workspaces) {
+      if (!this.remoteHostSubscriptions.has(workspace.endpointId)) {
+        const endpoint = this.remoteRegistry?.get(workspace.endpointId)
+        if (endpoint !== undefined) {
+          this.remoteHostSubscriptions.set(workspace.endpointId, endpoint.subscribeHost((frame) => {
+            this.handleHostEnvelope({ rpcId: 'remote-hub-host' as never, payload: qualifyRemoteHostFrame(frame, workspace.endpointId) })
+          }))
+        }
+      }
       for (const remote of workspace.sessions) {
         const ref = { endpointId: remote.endpointId, sessionId: remote.sessionId } as const
         const id = qualifiedSessionId(ref)
@@ -682,19 +727,38 @@ export class SessionManager {
   ): Promise<RpcResult<{ sessionId: SessionId }>> {
     try {
       const source = this.summaries.find(s => s.sessionId === opts.sessionId)
-      const { result } = await this.api.sessions.fork({
-        sessionId: opts.sessionId,
-        ...opts.atSeq === undefined ? {} : { atSeq: opts.atSeq },
-      })
+      const ref = parseQualifiedSessionId(opts.sessionId)
+      const result = ref === undefined
+        ? (await this.api.sessions.fork({
+          sessionId: opts.sessionId,
+          ...opts.atSeq === undefined ? {} : { atSeq: opts.atSeq },
+        })).result
+        : await this.remoteRegistry?.resolve(ref).fork(ref.sessionId, opts.atSeq) ?? {
+          ok: false as const,
+          error: { code: 'internal', message: 'remote endpoint unavailable', details: {} },
+        }
       const childId = result.ok
         ? result.value.sessionId
         : workspaceAttachSessionId(result.error)
       if (childId !== undefined) {
+        const qualifiedChildId = ref === undefined
+          ? childId
+          : qualifiedSessionId({ endpointId: ref.endpointId, sessionId: childId })
+        if (ref !== undefined) {
+          const transport = this.remoteRegistry?.resolve(ref)
+          if (transport !== undefined) this.remoteSessions.set(qualifiedChildId, remoteSessionTransport(transport, {
+            endpointId: ref.endpointId,
+            sessionId: childId,
+          }))
+        }
         this.recordMutation({ kind: 'upsert', summary: {
-          sessionId: childId, updatedAt: Date.now(), running: false, blank: false,
+          sessionId: qualifiedChildId, updatedAt: Date.now(), running: false, blank: false,
           parentSessionId: opts.sessionId,
           ...(source?.cwd !== undefined ? { cwd: source.cwd } : {}),
         } })
+      }
+      if (ref !== undefined && result.ok) {
+        return { ok: true, value: { sessionId: qualifiedSessionId({ endpointId: ref.endpointId, sessionId: result.value.sessionId }) } }
       }
       return result
     } catch (error) {

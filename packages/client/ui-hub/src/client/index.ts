@@ -8,7 +8,7 @@
 
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type { HubStatusResponse, HubWorkspaceListResult } from '@deepseek-ai/dsh-hub-protocol'
-import { createRemoteSessionTransport, REMOTE_SESSION_REGISTRY, REMOTE_WORKSPACE_SOURCE, RemoteSessionTransportRegistry, type RemoteWorkspaceSource } from '@deepseek-ai/dsh-hub-web-adapter'
+import { createRemoteSessionTransport, REMOTE_SESSION_REGISTRY, REMOTE_WORKSPACE_SOURCE, RemoteSessionTransportRegistry, type RemoteWorkspace, type RemoteWorkspaceSource } from '@deepseek-ai/dsh-hub-web-adapter'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { HubSection, type HubStatusResult } from './HubSection.tsx'
@@ -58,9 +58,7 @@ export function apply(ctx: ClientContext): void {
 
   const remoteWorkspaceSource: RemoteWorkspaceSource = {
     listSelected: async () => {
-      const response = await globalThis.fetch('/api/hub/workspaces', { credentials: 'same-origin' })
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      const result = await response.json() as HubWorkspaceListResult
+      const result = await rpc<HubWorkspaceListResult>('hub/workspaces', {})
       const selected = readSelectedWorkspaceIds()
       const endpointChanged = endpointId !== result.endpointId
       endpointId = result.endpointId
@@ -87,10 +85,22 @@ export function apply(ctx: ClientContext): void {
         }))
     },
     createSession: async (workspace) => {
-      const response = await globalThis.fetch(`/api/hub/workspace-session/create?workspaceId=${encodeURIComponent(workspace.workspaceId)}`, { credentials: 'same-origin' })
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      const result = await response.json() as { sessionId: string }
+      const result = await rpc<{ sessionId: string }>('hub/workspace-session/create', { workspaceId: workspace.workspaceId })
       return result.sessionId as never
+    },
+    rename: async (workspace, title) => {
+      const result = await rpc<RemoteWorkspace>('hub/workspace/rename', { workspaceId: workspace.workspaceId, title })
+      return { ...workspace, ...result }
+    },
+    delete: async (workspace) => {
+      await rpc('hub/workspace/delete', { workspaceId: workspace.workspaceId })
+    },
+    insertBefore: async (workspace, before) => {
+      await rpc('hub/workspace/insert-before', { workspaceId: workspace.workspaceId, ...(before === undefined ? {} : { beforeWorkspaceId: before.workspaceId }) })
+    },
+    insertSessionBefore: async (workspace, sessionId, beforeSessionId) => {
+      const result = await rpc<RemoteWorkspace>('hub/workspace/insert-session-before', { workspaceId: workspace.workspaceId, sessionId, ...(beforeSessionId === undefined ? {} : { beforeSessionId }) })
+      return { ...workspace, ...result }
     },
   }
   ctx.provide(REMOTE_SESSION_REGISTRY, transportRegistry)
@@ -113,13 +123,21 @@ export function apply(ctx: ClientContext): void {
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
       },
       loadWorkspaces: async () => {
-        const response = await globalThis.fetch('/api/hub/workspaces', { credentials: 'same-origin' })
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        const result = await response.json() as HubWorkspaceListResult
-        return result
+        return await rpc<HubWorkspaceListResult>('hub/workspaces', {})
       },
     }),
   }, HubSection))
+}
+
+async function rpc<T>(method: string, params: Record<string, unknown>): Promise<T> {
+  const response = await globalThis.fetch('/api/hub/rpc', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ method, params }),
+  })
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  return await response.json() as T
 }
 
 function readSelectedWorkspaceIds(): string[] {

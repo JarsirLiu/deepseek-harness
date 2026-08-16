@@ -5035,6 +5035,9 @@ importers:
 
   packages/hub/protocol:
     dependencies:
+      '@deepseek-ai/dsh-host-apiproxy':
+        specifier: workspace:^
+        version: link:../../host/apiproxy
       ws:
         specifier: ^8.18.0
         version: 8.21.0

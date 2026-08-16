@@ -15,6 +15,7 @@ import {
   type JsonRpcTransportPeer,
   type HubHandshakeResult,
   type HubEventNotification,
+  type HubHostNotification,
   type HubStatusNotification,
 } from '@deepseek-ai/dsh-hub-protocol'
 
@@ -94,6 +95,7 @@ export class RemoteSessionProvider {
   private readonly statusListeners = new Set<
     (notification: HubStatusNotification) => void
   >()
+  private readonly hostListeners = new Set<(notification: HubHostNotification) => void>()
 
   /** Request access for the provider-owned command client. */
   request(method: string, params: object): Promise<unknown> {
@@ -169,6 +171,13 @@ export class RemoteSessionProvider {
         if (method === 'hub/status') {
           const notification = params as unknown as HubStatusNotification
           for (const listener of this.statusListeners) {
+            try { listener(notification) } catch { /* ignore */ }
+          }
+          return
+        }
+        if (method === 'hub/host') {
+          const notification = params as unknown as HubHostNotification
+          for (const listener of this.hostListeners) {
             try { listener(notification) } catch { /* ignore */ }
           }
         }
@@ -249,6 +258,12 @@ export class RemoteSessionProvider {
       listeners.delete(listener)
       if (listeners.size === 0) this.eventListeners.delete('*')
     }
+  }
+
+  /** Subscribe to unchanged frames from the remote api.events.host stream. */
+  onHostFrame(listener: (notification: HubHostNotification) => void): () => void {
+    this.hostListeners.add(listener)
+    return () => { this.hostListeners.delete(listener) }
   }
 
   /** Ensure the transport is available. */

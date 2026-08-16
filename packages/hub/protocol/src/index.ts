@@ -22,6 +22,7 @@ export type {
   HubDeleteParams,
   HubDeleteResult,
   HubEventNotification,
+  HubHostNotification,
   HubHandshakeParams,
   HubHandshakeResult,
   HubInspectParams,

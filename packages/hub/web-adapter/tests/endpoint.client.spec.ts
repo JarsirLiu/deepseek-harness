@@ -46,9 +46,11 @@ describe('Hub Web adapter endpoint ownership', () => {
 
   it('preserves the official history view and projection baseline', async () => {
     const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
-      events: [{ event: { seq: 1, type: 'tool/result', data: {} }, view: { for: 'tool', card: 'chart' } }],
-      hasMore: true,
-      projections: { asOfSeq: 1, values: { permissions: { currentValue: 'workspace-write', options: [] } } },
+      result: { ok: true, value: {
+        events: [{ event: { seq: 1, type: 'tool/result', data: {} }, view: { for: 'tool', card: 'chart' } }],
+        hasMore: true,
+        projections: { asOfSeq: 1, values: { permissions: { currentValue: 'workspace-write', options: [] } } },
+      } },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     try {
       const result = await createRemoteSessionTransport('remote:first').history('session-1' as SessionId, { maxMessages: 5 })
@@ -63,8 +65,8 @@ describe('Hub Web adapter endpoint ownership', () => {
       expect(fetch.mock.calls[0]?.[0]).toBe('/api/hub/rpc')
       expect(fetch.mock.calls[0]?.[1]).toMatchObject({ method: 'POST' })
       expect(JSON.parse(String((fetch.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
-        method: 'hub/session/history',
-        params: { id: 'session-1', maxMessages: 5 },
+        method: 'hub/api/request',
+        params: { method: 'sessions.history', payload: { sessionId: 'session-1', maxMessages: 5 } },
       })
     } finally {
       fetch.mockRestore()

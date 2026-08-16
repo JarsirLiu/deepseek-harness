@@ -486,6 +486,11 @@ export class SessionRuntime implements ISessions {
     this.manager.handleDisconnected()
   }
 
+  /** Release manager-owned remote subscriptions and catalog timers. */
+  dispose(): void {
+    this.manager.dispose()
+  }
+
   /**
    * Create a session on the host. Resolution guarantee: by the time the
    * promise resolves, the created session is in the list store and
