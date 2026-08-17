@@ -6,7 +6,7 @@
 
 ## 配置
 
-插件 profile row 持有远程 WebSocket URI 与认证设置。它注册远程 session provider，并提供可选 UI 包使用的 `/api/hub/status` Web 端点。插件 fiber 释放时连接一并释放。
+插件 profile row 持有远程 WebSocket URI 与认证设置。客户端不能配置远程端点身份；成功的 Hub 握手是身份的唯一来源。握手完成前，`/api/hub/status` 返回 `endpointId: null`，也不会注册远程传输。插件注册远程 session provider，并提供可选 UI 包使用的 `/api/hub/status` Web 端点；插件 fiber 释放时连接一并释放。
 
 ## 安装
 

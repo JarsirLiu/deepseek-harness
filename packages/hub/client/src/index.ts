@@ -17,8 +17,6 @@ export const inject = ['sessions', 'webServer']
 
 /** Configuration for a remote hub connection. */
 export interface HubClientConfig {
-  /** Stable endpoint identity used to qualify remote sessions. */
-  endpointId?: `remote:${string}`
   /** WebSocket URI of the remote hub server, e.g. ws://192.168.1.100:8765/hub */
   uri: string
   /** Optional authentication token. */
@@ -31,7 +29,6 @@ export interface HubClientConfig {
 
 /** Cordis schema for the hub client configuration. */
 export const Config: Schema<HubClientConfig> = Schema.object({
-  endpointId: Schema.string().default('remote:configured-hub').description('Stable remote endpoint identity') as Schema<`remote:${string}`>,
   uri: Schema.string().required().description('WebSocket URI of the remote hub server'),
   token: Schema.string().default('').description('Optional authentication token'),
   autoConnect: Schema.boolean().default(true).description('Auto-connect on plugin load'),
@@ -90,7 +87,7 @@ export function apply(ctx: Context, config: HubClientConfig): void {
         const response = res as { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void }
         response.writeHead(200, { 'Content-Type': 'application/json' })
         const body = {
-          endpointId: provider.connectedServerInfo?.endpointId ?? config.endpointId ?? 'remote:configured-hub',
+          endpointId: provider.connectedServerInfo?.endpointId ?? null,
           status: provider.connectionState,
           isConnected: provider.isConnected,
           uri: config.uri,
@@ -123,7 +120,7 @@ export function apply(ctx: Context, config: HubClientConfig): void {
       handler: (_req: unknown, res: unknown) => {
         const response = res as { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void }
         response.writeHead(200, { 'Content-Type': 'application/json' })
-        response.end(JSON.stringify({ endpointId: config.endpointId ?? 'remote:configured-hub', uri: config.uri, token: config.token ?? '' }))
+        response.end(JSON.stringify({ uri: config.uri, token: config.token ?? '' }))
       },
     })
     ctx.effect(() => configDispose, 'hub-client.webServer.config')

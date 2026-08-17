@@ -812,8 +812,6 @@ export interface Config {
 ```ts config-catalog
 /** Configuration for a remote hub connection. */
 export interface HubClientConfig {
-  /** Stable endpoint identity used to qualify remote sessions. */
-  endpointId?: `remote:${string}`
   /** WebSocket URI of the remote hub server, e.g. ws://192.168.1.100:8765/hub */
   uri: string
   /** Optional authentication token. */
@@ -839,7 +837,7 @@ export interface HubClientConfig {
  */
 export interface HubServerConfig {
   /** Stable identity exposed to clients for this Hub endpoint. */
-  endpointId?: `remote:${string}`
+  endpointId: `remote:${string}`
   /** TCP port to listen on. Defaults to 8765. */
   port?: number
   /** Host to bind to. Defaults to '0.0.0.0'. */

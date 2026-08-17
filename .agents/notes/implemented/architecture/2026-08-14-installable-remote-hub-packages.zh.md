@@ -31,4 +31,4 @@ Hub 能力发布为三个可安装运行时包和一个可选 UI 包：
 
 ## Verification
 
-UI 组件测试覆盖 loading、全部连接状态、端点不可用、错误详情和重试行为。TypeScript project references 校验 protocol、server、client 和 Host API 入口及声明的依赖图。发布前仍需补充真实双进程 WebSocket Agent 集成测试。
+UI 组件测试覆盖 loading、全部连接状态、端点不可用、错误详情和重试行为。TypeScript project references 校验 protocol、server、client 和 Host API 入口及声明的依赖图。Hub client 校验端点身份只能来自握手，真实双进程 WebSocket 测试使用隔离进程验证 Server/Client 的身份交换。

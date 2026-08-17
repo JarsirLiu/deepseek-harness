@@ -12,6 +12,7 @@
       name: '@deepseek-ai/dsh-hub-server'
       disabled: true
       config:
+        endpointId: remote:local-hub
         port: 8765
         host: '127.0.0.1'
         authTokens: []

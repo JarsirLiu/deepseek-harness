@@ -6,7 +6,7 @@ Cordis plugin that exposes local Harness sessions over WebSocket JSON-RPC. Insta
 
 ## Configuration
 
-The plugin accepts `port`, `host`, `authTokens`, and `serverName` in its profile row. It owns the listening server and disposes it with the plugin fiber. The default bind address is loopback; set an explicit non-loopback address only with authentication and a protected transport.
+The plugin requires an explicit stable `endpointId` and accepts `port`, `host`, `authTokens`, and `serverName` in its profile row. `endpointId` is owned by the Host that owns the published sessions; it is returned during the handshake and is never derived from the client configuration or `serverName`. The plugin owns the listening server and disposes it with the plugin fiber. The default bind address is loopback; set an explicit non-loopback address only with authentication and a protected transport.
 
 ## Installation
 

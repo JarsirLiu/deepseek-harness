@@ -110,10 +110,11 @@ export class RemoteSessionProvider {
       transport.start()
 
       // Perform handshake.
-      this.handshakeResult = await transport.request('hub/handshake', {
+      const handshake = await transport.request('hub/handshake', {
         token: this.config.token || undefined,
         version: '0.1.0',
-      }) as HubHandshakeResult
+      })
+      this.handshakeResult = validateHandshakeResult(handshake)
 
       this.state = 'connected'
 
@@ -266,4 +267,27 @@ export class RemoteSessionProvider {
     return this.transport
   }
 
+}
+
+function validateHandshakeResult(value: unknown): HubHandshakeResult {
+  if (!isRecord(value)
+    || typeof value.endpointId !== 'string'
+    || !/^remote:[^\s]+$/u.test(value.endpointId)
+    || !isRecord(value.serverInfo)
+    || typeof value.serverInfo.name !== 'string'
+    || typeof value.serverInfo.version !== 'string'
+    || !isRecord(value.capabilities)
+    || typeof value.capabilities.subscriptions !== 'boolean'
+    || typeof value.capabilities.delete !== 'boolean'
+    || (value.capabilities.maxPayloadSize !== undefined
+      && (typeof value.capabilities.maxPayloadSize !== 'number'
+        || !Number.isInteger(value.capabilities.maxPayloadSize)
+        || value.capabilities.maxPayloadSize < 0))) {
+    throw new HubConnectionError('invalid hub handshake response')
+  }
+  return value as unknown as HubHandshakeResult
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

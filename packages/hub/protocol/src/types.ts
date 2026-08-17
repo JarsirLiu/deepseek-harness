@@ -231,8 +231,8 @@ export type HubConnectionState = 'disconnected' | 'connecting' | 'connected' | '
 
 /** Status response served by the host-side hub client web endpoint. */
 export interface HubStatusResponse {
-  /** Stable client-configured identity of the remote endpoint. */
-  endpointId: `remote:${string}`
+  /** Stable identity returned by the connected Hub, or null before handshake. */
+  endpointId: `remote:${string}` | null
   /** Current client connection state. */
   status: HubConnectionState
   /** Whether the client has an open hub connection. */

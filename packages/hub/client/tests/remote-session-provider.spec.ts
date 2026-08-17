@@ -3,13 +3,15 @@ import { describe, expect, it, vi } from 'vitest'
 
 class FakeWebSocket extends EventEmitter {
   static OPEN = 1
-  static behavior: 'open' | 'error' | 'timeout' | 'handshake-error' = 'open'
+  static behavior: 'open' | 'error' | 'timeout' | 'handshake-error' | 'invalid-handshake' = 'open'
   readyState = FakeWebSocket.OPEN
   sent: string[] = []
 
   constructor(readonly uri: string) {
     super()
-    if (FakeWebSocket.behavior === 'open' || FakeWebSocket.behavior === 'handshake-error') {
+    if (FakeWebSocket.behavior === 'open'
+      || FakeWebSocket.behavior === 'handshake-error'
+      || FakeWebSocket.behavior === 'invalid-handshake') {
       queueMicrotask(() => this.emit('open'))
     } else if (FakeWebSocket.behavior === 'error') {
       queueMicrotask(() => this.emit('error', new Error('connection refused')))
@@ -26,7 +28,7 @@ class FakeWebSocket extends EventEmitter {
     } else if (request.method === 'hub/handshake') {
       queueMicrotask(() => this.emit('message', JSON.stringify({
         jsonrpc: '2.0', id: request.id, result: {
-          endpointId: 'remote:test',
+          endpointId: FakeWebSocket.behavior === 'invalid-handshake' ? 'configured-client-id' : 'remote:test',
           serverInfo: { name: 'test', version: '1' },
           capabilities: { subscriptions: true, delete: true },
         },
@@ -88,6 +90,16 @@ describe('RemoteSessionProvider', () => {
     expect(provider.connectionState).toBe('error')
     expect(provider.connectedServerInfo).toBeNull()
     expect(() => provider.request('hub/list', {})).toThrow(HubConnectionError)
+    FakeWebSocket.behavior = 'open'
+  })
+
+  it('rejects a handshake response without a Hub-owned endpoint identity', async () => {
+    FakeWebSocket.behavior = 'invalid-handshake'
+    const provider = new RemoteSessionProvider({} as never, { uri: 'ws://test' })
+
+    await expect(provider.connect()).rejects.toThrow('invalid hub handshake response')
+    expect(provider.connectionState).toBe('error')
+    expect(provider.connectedServerInfo).toBeNull()
     FakeWebSocket.behavior = 'open'
   })
 

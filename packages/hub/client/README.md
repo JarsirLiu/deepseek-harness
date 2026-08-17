@@ -6,7 +6,7 @@ Cordis plugin that connects to a remote Hub server and exposes its sessions and 
 
 ## Configuration
 
-The plugin profile row owns the remote WebSocket URI and authentication settings. It registers the remote session provider and the `/api/hub/status` web endpoint used by the optional UI package. It disposes the connection with the plugin fiber.
+The plugin profile row owns the remote WebSocket URI and authentication settings. The remote endpoint identity is not configurable on the Client: a successful Hub handshake is its only source. Before that handshake, `/api/hub/status` reports `endpointId: null` and no remote transport is registered. The plugin registers the remote session provider and the `/api/hub/status` web endpoint used by the optional UI package, then disposes the connection with the plugin fiber.
 
 ## Installation
 

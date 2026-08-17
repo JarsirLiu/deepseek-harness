@@ -48,13 +48,15 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-hub: dictionaries')
 
   const t = ctx.locale.bind(NS)
-  let endpointId = 'remote:configured-hub' as `remote:${string}`
+  let endpointId: `remote:${string}` | undefined
   const transportRegistry = new RemoteSessionTransportRegistry()
   let disposeTransport = (): void => {}
 
   const bindTransport = (): void => {
     disposeTransport()
-    disposeTransport = transportRegistry.register(createRemoteSessionTransport(() => endpointId))
+    const connectedEndpointId = endpointId
+    if (connectedEndpointId === undefined) return
+    disposeTransport = transportRegistry.register(createRemoteSessionTransport(connectedEndpointId))
   }
 
   const remoteWorkspaceSource: RemoteWorkspaceSource = {
@@ -62,12 +64,13 @@ export function apply(ctx: ClientContext): void {
       const selected = readSelectedWorkspaceIds()
       const result = await rpc<HubWorkspaceListResult>('hub/workspaces', { workspaceIds: selected })
       await rpc('hub/subscribe-workspaces', { workspaceIds: selected })
-      const endpointChanged = endpointId !== result.endpointId
-      endpointId = result.endpointId
+      const connectedEndpointId = result.endpointId
+      const endpointChanged = endpointId !== connectedEndpointId
+      endpointId = connectedEndpointId
       if (endpointChanged) bindTransport()
       return result.workspaces
         .map(workspace => ({
-          endpointId,
+          endpointId: connectedEndpointId,
           workspaceId: workspace.id,
           title: workspace.title,
           path: workspace.path,

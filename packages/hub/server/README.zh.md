@@ -6,7 +6,7 @@
 
 ## 配置
 
-插件 profile row 接受 `port`、`host`、`authTokens` 和 `serverName`。它持有监听服务器，并随插件 fiber 一起释放。默认只监听回环地址；只有配置认证并保护传输时才应指定非回环地址。
+插件 profile row 必须提供稳定的 `endpointId`，并接受 `port`、`host`、`authTokens` 和 `serverName`。`endpointId` 由拥有所发布会话的 Host 持有，在握手时返回；它不会从客户端配置或 `serverName` 推导。插件持有监听服务器，并随插件 fiber 一起释放。默认只监听回环地址；只有配置认证并保护传输时才应指定非回环地址。
 
 ## 安装
 

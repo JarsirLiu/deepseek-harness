@@ -31,4 +31,4 @@ Consumers can install protocol, server, client, and UI roles independently, with
 
 ## Verification
 
-The UI component suite covers loading, all connection states, unavailable endpoint, error detail, and retry behavior. TypeScript project references validate the protocol, server, client, and Host API entrypoints and declared dependency graph. The remote Agent path still requires a real two-process WebSocket integration test before publication.
+The UI component suite covers loading, all connection states, unavailable endpoint, error detail, and retry behavior. TypeScript project references validate the protocol, server, client, and Host API entrypoints and declared dependency graph. The Hub client validates that endpoint identity comes from the handshake, and a real two-process WebSocket test verifies the Server/Client identity exchange with isolated processes.

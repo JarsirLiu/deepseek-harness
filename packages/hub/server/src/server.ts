@@ -38,7 +38,7 @@ interface ClientRecord {
  */
 export interface HubServerConfig {
   /** Stable identity exposed to clients for this Hub endpoint. */
-  endpointId?: `remote:${string}`
+  endpointId: `remote:${string}`
   /** TCP port to listen on. Defaults to 8765. */
   port?: number
   /** Host to bind to. Defaults to '0.0.0.0'. */
@@ -69,13 +69,14 @@ export class HubServer {
   private readonly eventDisposers: Array<() => void> = []
   private readonly config: Required<HubServerConfig>
   private started = false
+  private listeningPromise: Promise<void> | undefined
 
   constructor(
     private readonly ctx: Context,
-    config: HubServerConfig = {},
+    config: HubServerConfig,
   ) {
     this.config = {
-      endpointId: config.endpointId ?? `remote:${config.serverName ?? DEFAULTS.serverName}`,
+      endpointId: requireEndpointId(config.endpointId),
       port: config.port ?? DEFAULTS.port,
       host: config.host ?? DEFAULTS.host,
       authTokens: config.authTokens ?? [],
@@ -102,7 +103,19 @@ export class HubServer {
   start(): void {
     if (this.started) return
     this.started = true
-    this.httpServer.listen(this.config.port, this.config.host)
+    this.listeningPromise = new Promise<void>((resolve, reject) => {
+      const onError = (error: Error): void => {
+        this.httpServer.off('listening', onListening)
+        reject(error)
+      }
+      const onListening = (): void => {
+        this.httpServer.off('error', onError)
+        resolve()
+      }
+      this.httpServer.once('error', onError)
+      this.httpServer.once('listening', onListening)
+      this.httpServer.listen(this.config.port, this.config.host)
+    })
     this.ctx.logger.info(`hub server listening on ${this.config.host}:${this.config.port}`)
 
     // Subscribe to session events for forwarding to subscribed clients.
@@ -130,6 +143,12 @@ export class HubServer {
       }
       this.broadcastToSubscribers(session.id, 'hub/status', notification)
     }))
+  }
+
+  /** Wait until the configured listener has accepted its bind request. */
+  async waitUntilListening(): Promise<void> {
+    if (!this.listeningPromise) throw new Error('hub server has not started')
+    await this.listeningPromise
   }
 
   /** Stop the server and close all connections. */
@@ -423,4 +442,9 @@ export class HubServer {
       }
     }
   }
+}
+
+function requireEndpointId(endpointId: `remote:${string}`): `remote:${string}` {
+  if (!/^remote:[^\s]+$/u.test(endpointId)) throw new Error(`invalid Hub endpoint identity: ${endpointId}`)
+  return endpointId
 }
