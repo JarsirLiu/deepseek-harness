@@ -35,7 +35,10 @@ export function hostFrameWorkspaceIds(
     .map(workspace => workspace.id)
 }
 
-/** Whether an empty owner set is valid for a Host frame. */
+/** Whether an empty owner set is valid for a Host frame.
+ * @param frame - Host event frame to inspect.
+ * @returns whether the frame is valid without workspace ownership.
+ */
 export function isEndpointWideHostFrame(frame: HostFrame): boolean {
   return frame.type === 'host/remote-event' || frame.type === 'stream/error'
 }

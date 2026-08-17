@@ -14,6 +14,7 @@ import {
   type JsonRpcTransportPeer,
 } from '@deepseek-ai/dsh-hub-protocol'
 import type { ApiProxy, RpcId } from '@deepseek-ai/dsh-host-apiproxy/api'
+import type { HubWorkspaceDirectory, HubWorkspaceDirectoryEntry } from './workspace-directory.ts'
 
 /** Configuration for an Endpoint Agent connection. */
 export interface HubEndpointAgentConfig {
@@ -25,8 +26,10 @@ export interface HubEndpointAgentConfig {
   token: string
   /** Identity of the Host serving this endpoint. */
   serverInfo: { name: string; version: string }
-  /** Host API implementation used for requests forwarded by the Hub. */
-  apiProxy: Pick<ApiProxy, 'events'> & Record<string, Record<string, (request: unknown) => Promise<unknown>>>
+  /** Host API implementation used for forwarded requests and event subscription. */
+  apiProxy: ApiProxy
+  /** Authoritative local Host directory used for registration and refreshes. */
+  directory: HubWorkspaceDirectory
 }
 
 /** Outbound connection used by a Host to register with a Hub listener. */
@@ -41,11 +44,10 @@ export class HubEndpointAgent {
 
   constructor(private readonly config: HubEndpointAgentConfig) {}
 
-  /** Register this endpoint and publish its initial workspace directory.
-   * @param workspaces - complete workspace directory owned by this endpoint.
+  /** Register this endpoint with an authoritative local workspace directory.
    * @returns the registration result returned by the Hub listener.
    */
-  async connect(workspaces: HubEndpointSummary['workspaces']): Promise<HubAgentRegisterResult> {
+  async connect(): Promise<HubAgentRegisterResult> {
     if (this.transport !== null) throw new Error('Endpoint Agent is already connected')
     const ws = new WebSocket(this.config.uri)
     this.ws = ws
@@ -62,6 +64,7 @@ export class HubEndpointAgent {
       })
       transport.start()
       this.transport = transport
+      const workspaces = this.withEndpointId(await this.config.directory.snapshot())
       const result = await transport.request('hub/agent/register', {
         endpointId: this.config.endpointId,
         token: this.config.token,
@@ -82,13 +85,14 @@ export class HubEndpointAgent {
   /** Publish a complete replacement workspace directory to the Hub.
    * @param workspaces - complete replacement directory owned by this endpoint.
    */
-  async publishWorkspaces(workspaces: HubEndpointSummary['workspaces']): Promise<void> {
+  private async publishWorkspaces(workspaces: readonly HubWorkspaceDirectoryEntry[]): Promise<void> {
     const transport = this.transport
     if (transport === null) throw new Error('Endpoint Agent is not connected')
+    const published = this.withEndpointId(workspaces)
     await transport.request('hub/agent/publish-workspaces', {
-      workspaces: workspaces.map(workspace => ({ ...workspace, endpointId: this.config.endpointId })),
+      workspaces: published,
     })
-    this.setWorkspaces(workspaces)
+    this.setWorkspaces(published)
   }
 
   /** Publish one unchanged Host API frame with explicit workspace ownership.
@@ -143,7 +147,7 @@ export class HubEndpointAgent {
     const [domain, operation] = params.method.split('.')
     const handler = domain === undefined || operation === undefined
       ? undefined
-      : this.config.apiProxy[domain === 'session' ? 'sessions' : domain === 'subagent' ? 'subagents' : domain]?.[operation]
+      : (this.config.apiProxy as unknown as Record<string, Record<string, (request: unknown) => Promise<unknown>>>)[domain === 'session' ? 'sessions' : domain === 'subagent' ? 'subagents' : domain]?.[operation]
     if (handler === undefined) throw new Error(`unsupported Endpoint Agent API method: ${params.method}`)
     return await handler({ rpcId: `hub-agent-api-${randomUUID()}`, payload: params.payload })
   }
@@ -156,51 +160,71 @@ export class HubEndpointAgent {
     }]))
   }
 
+  private withEndpointId(workspaces: readonly HubWorkspaceDirectoryEntry[]): HubEndpointSummary['workspaces'] {
+    return workspaces.map(workspace => ({
+      ...workspace,
+      endpointId: this.config.endpointId,
+      sessions: workspace.sessions.map(session => ({ ...session, endpointId: this.config.endpointId })),
+    }))
+  }
+
   private startHostBridge(): void {
     const controller = new AbortController()
     this.hostAbortController = controller
     this.hostStreamDone = (async () => {
       try {
         for await (const envelope of this.config.apiProxy.events.host({ rpcId: `hub-agent-host-${randomUUID()}` as RpcId, payload: {} }, controller.signal)) {
-          const owners = hostFrameWorkspaceIds(envelope.payload, [...this.workspaces.values()])
-          if (isSessionHostFrame(envelope.payload) && owners.length !== 1) {
-            throw new Error(`Endpoint Agent cannot uniquely determine Host frame workspace: ${envelope.payload.type}`)
-          }
-          if (owners.length === 0 && !isEndpointWideHostFrame(envelope.payload)) {
-            throw new Error(`Endpoint Agent cannot determine Host frame workspace: ${envelope.payload.type}`)
-          }
-          if (owners.length === 0) this.publishHostEvent(null, envelope.payload)
-          else for (const workspaceId of owners) this.publishHostEvent(workspaceId, envelope.payload)
-          this.updateWorkspaceOwnership(envelope.payload, owners)
+          await this.bridgeHostFrame(envelope.payload)
         }
       } catch (error) {
-        if (!controller.signal.aborted) this.hostStreamError = error
+        if (!controller.signal.aborted) this.failHostBridge(error)
       }
     })()
   }
 
-  private updateWorkspaceOwnership(frame: import('@deepseek-ai/dsh-host-apiproxy/api').HostFrame, owners: readonly string[]): void {
-    if (frame.type === 'host/session-added') {
-      for (const workspaceId of owners) {
-        const workspace = this.workspaces.get(workspaceId)
-        if (workspace !== undefined && !workspace.sessionIds.includes(frame.sessionId)) {
-          workspace.sessionIds = [...workspace.sessionIds, frame.sessionId]
-        }
-      }
-    } else if (frame.type === 'host/session-removed') {
-      for (const workspace of this.workspaces.values()) {
-        workspace.sessionIds = workspace.sessionIds.filter(sessionId => sessionId !== frame.sessionId)
-      }
-    } else if (frame.type === 'host/workspace-changed') {
-      const workspace = this.workspaces.get(frame.workspace.workspaceId)
-      if (workspace !== undefined) {
-        workspace.path = frame.workspace.path
-        workspace.sessionIds = [...frame.workspace.sessionIds]
-      }
-    } else if (frame.type === 'host/workspace-removed') {
-      this.workspaces.delete(frame.workspaceId)
+  private async bridgeHostFrame(frame: import('@deepseek-ai/dsh-host-apiproxy/api').HostFrame): Promise<void> {
+    if (frame.type === 'host/workspace-changed' && !this.workspaces.has(frame.workspace.workspaceId)) {
+      await this.publishWorkspaces(await this.config.directory.snapshot())
+      this.publishHostFrame(frame, [frame.workspace.workspaceId])
+      return
     }
+    const owners = hostFrameWorkspaceIds(frame, [...this.workspaces.values()])
+    if (isSessionHostFrame(frame) && owners.length !== 1) {
+      throw new Error(`Endpoint Agent cannot uniquely determine Host frame workspace: ${frame.type}`)
+    }
+    if (owners.length === 0 && !isEndpointWideHostFrame(frame)) {
+      if (frame.type !== 'host/workspace-changed') throw new Error(`Endpoint Agent cannot determine Host frame workspace: ${frame.type}`)
+      await this.publishWorkspaces(await this.config.directory.snapshot())
+      this.publishHostFrame(frame)
+      return
+    }
+    this.publishHostFrame(frame, owners)
+    if (directoryRefreshFrame(frame)) await this.publishWorkspaces(await this.config.directory.snapshot())
   }
+
+  private publishHostFrame(frame: import('@deepseek-ai/dsh-host-apiproxy/api').HostFrame, owners?: readonly string[]): void {
+    if (owners === undefined || owners.length === 0) this.publishHostEvent(null, frame)
+    else for (const workspaceId of owners) this.publishHostEvent(workspaceId, frame)
+  }
+
+  private failHostBridge(error: unknown): void {
+    this.hostStreamError = error
+    this.hostAbortController?.abort()
+    this.ws?.close()
+    this.transport = null
+    this.ws = null
+    this.registration = null
+    this.workspaces.clear()
+  }
+}
+
+function directoryRefreshFrame(frame: import('@deepseek-ai/dsh-host-apiproxy/api').HostFrame): boolean {
+  return frame.type === 'host/session-added'
+    || frame.type === 'host/session-removed'
+    || frame.type === 'host/session-status'
+    || frame.type === 'host/workspace-changed'
+    || frame.type === 'host/workspace-removed'
+    || frame.type === 'host/workspace-order-changed'
 }
 
 function isSessionHostFrame(frame: import('@deepseek-ai/dsh-host-apiproxy/api').HostFrame): boolean {

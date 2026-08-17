@@ -30,7 +30,7 @@ Endpoint C ─┘                 └── Hub Y (replacement)
 
 Broker 独立管理每个 Endpoint Agent 和 Web 客户端连接。认证身份、端点注册、工作区订阅、会话订阅和事件清理都以连接为作用域。客户端提供的端点标签不是认证身份。
 
-Endpoint Agent 向 Broker 注册端点，发布工作区摘要，并接收针对自身 Host 的 API 请求。Broker 保存端点在线状态和目录元数据，执行访问策略，并转发请求和 Host 事件帧。会话日志、工作区、模型和其他 Host 状态仍由 Endpoint 持有。
+Endpoint Agent 向 Broker 注册端点，并从本端 Host 的 `workspace.list` 与 `session.list` API 读取完整目录快照后发布。工作区或会话目录事件会触发串行快照替换；快照失败会断开 Agent，Broker 不会继续保留旧目录元数据。Broker 保存端点在线状态和目录元数据，执行访问策略，并转发请求和 Host 事件帧。会话日志、工作区、模型和其他 Host 状态仍由 Endpoint 持有。
 
 任意节点都可以在运行自身 Host 的同时承担 Broker 角色。单 Host 部署仍然有效，也可以使用不拥有 Host 的独立 Broker。要实现多端点发现，必须使用 Broker 角色，并让每个参与的 Host 都建立 Agent 连接。端点之间通过 Broker 路由、并受授权控制的 Host API 调用互通；Broker 不提供端点之间的任意网络访问。
 

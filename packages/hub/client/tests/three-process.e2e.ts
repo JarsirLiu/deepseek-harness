@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 interface RunningProcess {
   child: ChildProcess
   ready: Promise<Record<string, unknown>>
+  directoryUpdated: Promise<Record<string, unknown>>
 }
 
 const tsconfigPath = fileURLToPath(new URL('../../../../tsconfig.json', import.meta.url))
@@ -139,6 +140,24 @@ describe('Hub endpoint identity across isolated processes', () => {
       }),
     ])
   }, 15_000)
+
+  it('discovers a workspace added by the Agent after registration', async () => {
+    const port = await freePort()
+    const server = startProcess(serverFixture, [String(port), 'remote:broker-owned'])
+    children.push(server.child)
+    await server.ready
+
+    const agent = startProcess(agentFixture, [String(port), 'remote:registered-agent', 'workspace-agent', 'workspace-new'])
+    children.push(agent.child)
+    await agent.ready
+    await expect(agent.directoryUpdated).resolves.toMatchObject({ workspaceId: 'workspace-new' })
+
+    const client = startProcess(clientFixture, [`ws://127.0.0.1:${port}/hub`, 'remote:registered-agent', 'workspace-new'])
+    children.push(client.child)
+    await expect(client.ready).resolves.toMatchObject({
+      workspaces: { workspaces: [expect.objectContaining({ id: 'workspace-new', endpointId: 'remote:registered-agent' })] },
+    })
+  }, 15_000)
 })
 
 function startProcess(script: string, args: readonly string[]): RunningProcess {
@@ -147,6 +166,10 @@ function startProcess(script: string, args: readonly string[]): RunningProcess {
     env: { ...process.env, TSX_TSCONFIG_PATH: tsconfigPath },
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
+  })
+  let resolveDirectoryUpdated: (value: Record<string, unknown>) => void
+  const directoryUpdated = new Promise<Record<string, unknown>>((resolve) => {
+    resolveDirectoryUpdated = resolve
   })
   const ready = new Promise<Record<string, unknown>>((resolve, reject) => {
     const stdout = child.stdout
@@ -161,10 +184,10 @@ function startProcess(script: string, args: readonly string[]): RunningProcess {
       try {
         const value = JSON.parse(line) as Record<string, unknown>
         if (value.type === 'ready' || value.type === 'error') {
-          lines.close()
           if (value.type === 'error') reject(new Error(String(value.message)))
           else resolve(value)
         }
+        if (value.type === 'directory-updated') resolveDirectoryUpdated(value)
       } catch {
         // Non-JSON diagnostics are retained in the child stderr or ignored here.
       }
@@ -172,10 +195,11 @@ function startProcess(script: string, args: readonly string[]): RunningProcess {
     child.once('error', reject)
     child.once('exit', (code, signal) => {
       reject(new Error(`Hub fixture exited before ready: code=${String(code)} signal=${String(signal)} stderr=${stderr.join('')}`))
+      resolveDirectoryUpdated({ type: 'directory-update-unavailable', code, signal, stderr: stderr.join('') })
     })
   })
   child.stdin?.end()
-  return { child, ready }
+  return { child, ready, directoryUpdated }
 }
 
 async function stopProcess(child: ChildProcess): Promise<void> {

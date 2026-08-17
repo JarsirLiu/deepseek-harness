@@ -658,13 +658,13 @@ function parseWorkspaceSubscriptionParams(params: Record<string, unknown>): { wo
 
 function parseAgentHostEventParams(params: Record<string, unknown>): HubAgentHostEventParams {
   if (typeof params.endpointId !== 'string' || !/^remote:[^\s]+$/u.test(params.endpointId)
-    || typeof params.workspaceId !== 'string' || params.workspaceId === ''
+    || (params.workspaceId !== null && (typeof params.workspaceId !== 'string' || params.workspaceId === ''))
     || !isRecord(params.frame) || typeof params.frame.type !== 'string') {
     throw new Error('invalid Endpoint Agent Host event')
   }
   return {
     endpointId: params.endpointId as `remote:${string}`,
-    workspaceId: params.workspaceId,
+    workspaceId: params.workspaceId as string | null,
     frame: params.frame as HubAgentHostEventParams['frame'],
   }
 }

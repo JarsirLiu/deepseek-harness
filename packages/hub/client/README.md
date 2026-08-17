@@ -8,9 +8,9 @@ Cordis plugin that connects to a remote Hub server and exposes its sessions and 
 
 The plugin profile row owns the remote WebSocket URI and authentication settings. The remote endpoint identity is not configurable on the Client: a successful Hub handshake is its only source. Before that handshake, `/api/hub/status` reports `endpointId: null` and no remote transport is registered. The plugin registers the remote session provider and the `/api/hub/status` web endpoint used by the optional UI package, then disposes the connection with the plugin fiber.
 
-The package also exports `HubEndpointAgent` for a Host that registers itself with a Hub listener. The Agent requires an explicit endpoint identity, registration token, Host `apiProxy`, and complete workspace directory. It accepts only API requests addressed to its endpoint and a published workspace, then returns the original Host API result without projecting it into a Hub-specific model.
+The package also exports `HubEndpointAgent` for a Host that registers itself with a Hub listener. The Agent requires an explicit endpoint identity, registration token, Host `apiProxy`, and `HubWorkspaceDirectoryProvider`. The provider reads complete `workspace.list` and `session.list` snapshots from that Host; the Agent publishes the snapshot at registration and serially replaces it after workspace or session directory changes.
 
-After registration, the Agent consumes the same Host `api.events.host` stream used by local clients. It determines each frame's workspace from the published directory, forwards the unchanged frame through the Hub, and aborts and awaits the stream during disconnect. An endpoint-wide frame uses `workspaceId: null`; a project frame without a unique owner terminates the bridge instead of being broadcast ambiguously.
+After registration, the Agent consumes the same Host `api.events.host` stream used by local clients. It determines each frame's workspace from the published directory, forwards the unchanged frame through the Hub, and aborts and awaits the stream during disconnect. An endpoint-wide frame uses `workspaceId: null`; a project frame without a unique owner terminates the bridge instead of being broadcast ambiguously. A directory snapshot failure closes the Agent connection so the Hub cannot continue advertising stale metadata.
 
 ## Installation
 
@@ -36,4 +36,5 @@ No additional effect; the session composition owns provider request assembly and
 
 - **The UI is optional** — installing the client provider without `dsh-client-ui-hub` still provides remote sessions but no settings section.
 - **Web routing is deployment-owned** — `RemoteAgentClient` provides the remote execution face; the host API must select it for sessions configured for remote execution.
-- **Endpoint Agent publication is explicit** — the host integration must provide workspace summaries to `HubEndpointAgent`; this package does not infer or synthesize a directory.
+- **Directory authority is local** — the Agent derives discovery metadata from the owning Host's `workspace.list` and `session.list`; it does not synthesize summaries from individual Host frames.
+- **Discovery is separate from projection** — publishing a newly discovered workspace only makes it selectable in settings. The client homepage includes it only after the user selects its `(endpointId, workspaceId)` reference.

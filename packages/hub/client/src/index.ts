@@ -11,6 +11,8 @@ import { RemoteSessionProvider } from './remote-session-provider.ts'
 export { RemoteSessionProvider, HubConnectionError } from './remote-session-provider.ts'
 export { HubEndpointAgent } from './endpoint-agent.ts'
 export type { HubEndpointAgentConfig } from './endpoint-agent.ts'
+export { HubWorkspaceDirectoryProvider } from './workspace-directory.ts'
+export type { HubWorkspaceDirectory, HubWorkspaceDirectoryEntry } from './workspace-directory.ts'
 export type { RemoteHubConfig } from './remote-session-provider.ts'
 
 export const name = 'hub-client'

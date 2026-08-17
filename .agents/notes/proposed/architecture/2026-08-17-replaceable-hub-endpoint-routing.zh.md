@@ -12,6 +12,8 @@ Status: proposed
 
 Endpoint 持有稳定的 `endpointId`、工作区、会话、模型和会话日志。Host 可以同时运行 Endpoint Agent 与 Hub Broker；也可以运行不拥有 Host 的独立 Broker。Broker 提供认证连接管理、端点发现、授权、请求路由和 Host 事件转发；它不拥有端点资源，也不提供端点之间的任意网络访问。
 
+Agent 的目录权威性记录在 [Endpoint Directory Authority 决策](../../implemented/architecture/2026-08-17-agent-directory-authority.md)中；本提案保留更广泛的拓扑和授权决策。
+
 Endpoint 到 Broker 的凭据只授权一条连接关系；Endpoint 更换 Hub 时可以更换该凭据。客户端使用包含所属 `endpointId` 和资源 ID 的复合引用访问远程资源。本地和远程操作使用同一套 Host API 约定，区别只有传输层。远程路径、工作目录、文件、进程、模型、会话和工作区都由所属 Host 解释并执行。
 
 更换 Hub 不改变 Endpoint 和资源身份。多个 Broker 连接、Hub 联邦、自动故障切换和跨 Broker 发现属于独立能力，需要分别决策。

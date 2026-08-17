@@ -30,7 +30,7 @@ Endpoint C ─┘                 └── Hub Y (replacement)
 
 The Broker manages Endpoint Agent and Web client connections independently. Authentication identity, endpoint registration, workspace subscriptions, session subscriptions, and event cleanup are scoped to the connection. A client-provided endpoint label is not an authentication identity.
 
-An Endpoint Agent registers its endpoint with the Broker, publishes workspace summaries, and receives API requests for its own Host. The Broker stores endpoint presence and directory metadata, applies access policy, and forwards requests and Host event frames. Session logs, workspaces, models, and other Host state remain owned by the Endpoint.
+An Endpoint Agent registers its endpoint with the Broker and publishes a complete directory snapshot read from its Host's `workspace.list` and `session.list` APIs. Workspace and session directory frames trigger serial replacement snapshots; a snapshot failure disconnects the Agent so the Broker does not retain stale metadata. The Broker stores endpoint presence and directory metadata, applies access policy, and forwards requests and Host event frames. Session logs, workspaces, models, and other Host state remain owned by the Endpoint.
 
 Any node may run the Broker role alongside its own Host. A single-host deployment remains valid, and a dedicated Broker may run without owning a Host. Multi-endpoint discovery requires the Broker role and an Agent connection from every participating Host. Endpoints reach one another through authorized Host API calls routed by the Broker; the Broker does not provide arbitrary network access between endpoints.
 

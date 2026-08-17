@@ -12,6 +12,8 @@ The multi-endpoint target architecture needs to support any node acting as a Hub
 
 An Endpoint owns its stable `endpointId`, workspaces, sessions, models, and session logs. A Host may run an Endpoint Agent and a Hub Broker at the same time, while a dedicated Broker may run without a Host. The Broker provides authenticated connection management, endpoint discovery, authorization, request routing, and Host event forwarding; it does not own endpoint resources or expose arbitrary endpoint-to-endpoint networking.
 
+The Agent's directory authority is recorded in the [Endpoint Directory Authority decision](../../implemented/architecture/2026-08-17-agent-directory-authority.md); this proposal retains the broader topology and authorization decisions.
+
 An Endpoint-to-Broker credential authorizes one connection relationship and may be replaced when the Endpoint changes Hubs. A client addresses remote resources with a compound reference containing the owning `endpointId` and resource ID. Local and remote operations use the same Host API contract; only the transport differs. Remote paths, working directories, files, processes, models, sessions, and workspaces are interpreted and executed by the owning Host.
 
 Hub replacement preserves Endpoint and resource identities. Multiple Broker connections, Hub federation, automatic failover, and cross-Broker discovery are separate capabilities and require their own decisions.
