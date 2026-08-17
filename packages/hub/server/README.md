@@ -6,7 +6,7 @@ Cordis plugin that exposes local Harness sessions over WebSocket JSON-RPC. Insta
 
 ## Configuration
 
-The plugin requires an explicit stable `endpointId` and accepts `port`, `host`, `authTokens`, `agentTokens`, and `serverName` in its profile row. `endpointId` is owned by the Host that owns the published sessions; it is returned during the handshake and is never derived from the client configuration or `serverName`. `agentTokens` maps stable Endpoint Agent identities to explicit registration credentials. Registered Agents publish workspace summaries through the same listener, and authenticated Clients discover them with `hub/list-endpoints`. The plugin owns the listening server and disposes it with the plugin fiber. The default bind address is loopback; set an explicit non-loopback address only with authentication and a protected transport.
+The plugin requires an explicit stable `endpointId` and accepts `port`, `host`, `authTokens`, `agentTokens`, and `serverName` in its profile row. `endpointId` is owned by the Host that owns the published sessions; it is returned during the handshake and is never derived from the client configuration or `serverName`. `agentTokens` maps stable Endpoint Agent identities to explicit registration credentials. Registered Agents publish workspace summaries through the same listener, and authenticated Clients discover them with `hub/list-endpoints` or `hub/workspaces`. Workspace entries retain their owning `endpointId`, so equal workspace ids on different endpoints remain distinct. API requests carry both `endpointId` and `workspaceId`; the server validates the published workspace, forwards requests for registered endpoints to the owning Agent, and returns the Agent's original API result. The plugin owns the listening server and disposes it with the plugin fiber. The default bind address is loopback; set an explicit non-loopback address only with authentication and a protected transport.
 
 ## Installation
 
@@ -31,5 +31,5 @@ None directly; the server does not change provider request assembly.
 ## Known Limitations and Deferred Work
 
 - **The listener is a deployment endpoint** — bind address, firewall, TLS, and token distribution must be configured by the deployment.
-- **Agent API forwarding is not exposed yet** — this step registers Agents and publishes workspace summaries; session and Host API forwarding for registered endpoints remains a separate capability.
+- **Agent API forwarding requires explicit addressing** — requests must name the owning `endpointId` and `workspaceId`; the listener does not infer an endpoint from a session id or fall back to a local API.
 - **Session deletion is not exposed** — the protocol advertises deletion as unsupported until the persistence seam provides a real deletion operation.

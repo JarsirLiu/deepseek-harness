@@ -21,7 +21,10 @@ const server = new HubServer(ctx as never, {
   port,
   host: '127.0.0.1',
   endpointId,
-  agentTokens: { 'remote:registered-agent': 'agent-secret' },
+  agentTokens: {
+    'remote:registered-agent': 'agent-secret',
+    'remote:second-agent': 'agent-secret',
+  },
 })
 server.start()
 await server.waitUntilListening()

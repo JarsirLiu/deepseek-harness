@@ -13,13 +13,18 @@ describe('Hub endpoint identity', () => {
       endpointId: 'remote:broker',
       agentTokens: { 'remote:agent': 'secret' },
     })
-    const client = {
+    type TestClient = {
+      authenticated: boolean
+      role: 'client'
+      endpointId: undefined
+    }
+    const client: TestClient = {
       authenticated: false,
       role: 'client' as const,
       endpointId: undefined,
     }
     const register = (server as unknown as {
-      handleAgentRegister: (client: typeof client, params: unknown) => unknown
+      handleAgentRegister: (client: TestClient, params: unknown) => unknown
     }).handleAgentRegister.bind(server)
     await expect(Promise.resolve().then(() => register(client, {
       endpointId: 'remote:agent', token: 'wrong', serverInfo: { name: 'agent', version: '1' }, workspaces: [],

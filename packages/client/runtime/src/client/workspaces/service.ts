@@ -340,8 +340,18 @@ export class WorkspaceRuntime implements IWorkspaces {
     const registry = this.ctx.get(REMOTE_SESSION_REGISTRY) as RemoteSessionTransportRegistry | undefined
     const result = ref === undefined
       ? await this.manager.archiveSession(sessionId)
-      : await registry?.resolve(ref).archiveSession(ref.sessionId) ?? { ok: false, error: { code: 'internal', message: 'remote endpoint unavailable', details: {} } }
+      : await registry?.resolve(ref).archiveSession(this.remoteWorkspaceForSession(sessionId), ref.sessionId) ?? { ok: false, error: { code: 'internal', message: 'remote endpoint unavailable', details: {} } }
     if (!result.ok) throw new Error(`session archive failed: ${result.error.code}: ${result.error.message}`)
+  }
+
+  private remoteWorkspaceForSession(sessionId: SessionId): string {
+    const ref = parseQualifiedSessionId(sessionId)
+    if (ref === undefined) throw new Error(`remote session reference required: ${String(sessionId)}`)
+    for (const workspace of this.remoteById.values()) {
+      if (workspace.endpointId !== ref.endpointId) continue
+      if (workspace.sessions.some(session => session.sessionId === ref.sessionId)) return workspace.workspaceId
+    }
+    throw new Error(`remote workspace unavailable for session ${String(sessionId)}`)
   }
 
   /**

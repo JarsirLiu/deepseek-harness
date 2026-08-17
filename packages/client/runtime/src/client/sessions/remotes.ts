@@ -65,24 +65,25 @@ export function localSessionTransport(api: IApiClient, sessionId: SessionId): Se
 /** Adapt one endpoint-owned Hub transport to the Runtime Session interface.
  * @param transport - the Hub transport for the owning endpoint.
  * @param ref - the endpoint-qualified session reference.
+ * @param workspaceId - the explicit workspace that owns the session.
  * @returns the Runtime session transport.
  */
-export function remoteSessionTransport(transport: RemoteSessionTransport, ref: SessionRef): SessionTransport {
+export function remoteSessionTransport(transport: RemoteSessionTransport, ref: SessionRef, workspaceId: string): SessionTransport {
   if (!transport.owns(ref)) throw new Error(`remote transport does not own session ${String(ref.sessionId)}`)
   const id = ref.sessionId
   return {
-    history: payload => asResponse(transport.history(id, payload)),
-    prompt: (content, mode) => asResponse(transport.prompt(id, content, mode)),
-    cancel: () => asResponse(transport.cancel(id)),
-    rename: title => asResponse(transport.rename(id, title)),
-    updateQueue: (itemId, action) => asResponse(transport.updateQueue(id, itemId, action)),
-    readAttachment: attachmentId => asResponse(transport.readAttachment(id, attachmentId)),
-    models: () => asResponse(transport.models(id)),
-    selectModel: selection => asResponse(transport.selectModel(id, selection)),
-    subagentList: () => asResponse(transport.subagentList(id)),
-    subagentHistory: (address, payload) => asResponse(transport.subagentHistory(toRemoteAddress(address, ref), payload)),
-    subagentPrompt: (address, content) => asResponse(transport.subagentPrompt(toRemoteAddress(address, ref) as Extract<SubagentAddress, { mode: 'continuable' }>, content)),
-    subagentInterrupt: address => asResponse(transport.subagentInterrupt(toRemoteAddress(address, ref) as Extract<SubagentAddress, { mode: 'continuable' }>)),
+    history: payload => asResponse(transport.history(workspaceId, id, payload)),
+    prompt: (content, mode) => asResponse(transport.prompt(workspaceId, id, content, mode)),
+    cancel: () => asResponse(transport.cancel(workspaceId, id)),
+    rename: title => asResponse(transport.rename(workspaceId, id, title)),
+    updateQueue: (itemId, action) => asResponse(transport.updateQueue(workspaceId, id, itemId, action)),
+    readAttachment: attachmentId => asResponse(transport.readAttachment(workspaceId, id, attachmentId)),
+    models: () => asResponse(transport.models(workspaceId, id)),
+    selectModel: selection => asResponse(transport.selectModel(workspaceId, id, selection)),
+    subagentList: () => asResponse(transport.subagentList(workspaceId, id)),
+    subagentHistory: (address, payload) => asResponse(transport.subagentHistory(workspaceId, toRemoteAddress(address, ref), payload)),
+    subagentPrompt: (address, content) => asResponse(transport.subagentPrompt(workspaceId, toRemoteAddress(address, ref) as Extract<SubagentAddress, { mode: 'continuable' }>, content)),
+    subagentInterrupt: address => asResponse(transport.subagentInterrupt(workspaceId, toRemoteAddress(address, ref) as Extract<SubagentAddress, { mode: 'continuable' }>)),
   }
 }
 

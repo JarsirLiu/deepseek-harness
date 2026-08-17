@@ -47,6 +47,10 @@ describe('Hub endpoint identity across isolated processes', () => {
     children.push(agent.child)
     await expect(agent.ready).resolves.toMatchObject({ type: 'ready', endpointId: 'remote:registered-agent' })
 
+    const secondAgent = startProcess(agentFixture, [String(port), 'remote:second-agent'])
+    children.push(secondAgent.child)
+    await expect(secondAgent.ready).resolves.toMatchObject({ type: 'ready', endpointId: 'remote:second-agent' })
+
     const client = startProcess(clientFixture, [`ws://127.0.0.1:${port}/hub`])
     children.push(client.child)
     const clientReady = await client.ready
@@ -56,10 +60,60 @@ describe('Hub endpoint identity across isolated processes', () => {
     }
     expect(endpointList.endpoints.some(endpoint => endpoint.endpointId === 'remote:registered-agent'
       && endpoint.workspaces.some(workspace => workspace.id === 'workspace-agent'))).toBe(true)
+    expect(endpointList.endpoints.some(endpoint => endpoint.endpointId === 'remote:second-agent'
+      && endpoint.workspaces.some(workspace => workspace.id === 'workspace-agent'))).toBe(true)
+    const workspaceList = clientReady.workspaces as {
+      endpointId: string
+      workspaces: Array<{ endpointId: string; id: string }>
+    }
+    expect(workspaceList.workspaces).toEqual(expect.arrayContaining([
+      expect.objectContaining({ endpointId: 'remote:registered-agent', id: 'workspace-agent' }),
+      expect.objectContaining({ endpointId: 'remote:second-agent', id: 'workspace-agent' }),
+    ]))
+
+    const routedClient = startProcess(clientFixture, [
+      `ws://127.0.0.1:${port}/hub`, 'remote:registered-agent', 'workspace-agent',
+    ])
+    children.push(routedClient.child)
+    await expect(routedClient.ready).resolves.toMatchObject({
+      request: { ok: true, value: { source: 'remote:registered-agent' } },
+    })
+
+    const secondRoutedClient = startProcess(clientFixture, [
+      `ws://127.0.0.1:${port}/hub`, 'remote:second-agent', 'workspace-agent',
+    ])
+    children.push(secondRoutedClient.child)
+    await expect(secondRoutedClient.ready).resolves.toMatchObject({
+      request: { ok: true, value: { source: 'remote:second-agent' } },
+    })
+
+    const unknownEndpointClient = startProcess(clientFixture, [
+      `ws://127.0.0.1:${port}/hub`, 'remote:missing', 'workspace-agent',
+    ])
+    children.push(unknownEndpointClient.child)
+    await expect(unknownEndpointClient.ready).rejects.toThrow('remote endpoint unavailable: remote:missing')
 
     const duplicateAgent = startProcess(agentFixture, [String(port)])
     children.push(duplicateAgent.child)
     await expect(duplicateAgent.ready).rejects.toThrow('endpoint already connected: remote:registered-agent')
+  }, 15_000)
+
+  it('rejects a routed request after the owning Agent disconnects', async () => {
+    const port = await freePort()
+    const server = startProcess(serverFixture, [String(port), 'remote:broker-owned'])
+    children.push(server.child)
+    await server.ready
+
+    const agent = startProcess(agentFixture, [String(port)])
+    children.push(agent.child)
+    await agent.ready
+    await stopProcess(agent.child)
+
+    const client = startProcess(clientFixture, [
+      `ws://127.0.0.1:${port}/hub`, 'remote:registered-agent', 'workspace-agent',
+    ])
+    children.push(client.child)
+    await expect(client.ready).rejects.toThrow('remote endpoint unavailable: remote:registered-agent')
   }, 15_000)
 })
 

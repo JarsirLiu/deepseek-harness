@@ -6,7 +6,7 @@
 
 ## 使用方式
 
-将本包作为 Hub 运行时角色的依赖安装。本包没有 Cordis plugin row、profile patch 或进程入口。导出的类型描述浏览器设置区使用的状态响应、Endpoint Agent 注册与工作区发现，以及 server 与 client 使用的会话操作。
+将本包作为 Hub 运行时角色的依赖安装。本包没有 Cordis plugin row、profile patch 或进程入口。导出的类型描述浏览器设置区使用的状态响应、Endpoint Agent 注册、工作区发现、端点限定的 API 请求，以及 server 与 client 使用的会话操作。
 
 ## Model Experience
 

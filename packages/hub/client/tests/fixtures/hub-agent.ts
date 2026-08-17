@@ -1,21 +1,37 @@
 /** Three-process Endpoint Agent fixture for Hub registration and discovery. */
 
 import { HubEndpointAgent } from '../../src/endpoint-agent.ts'
+import type { HubEndpointSummary } from '@deepseek-ai/dsh-hub-protocol'
+import type { SessionId } from '@deepseek-ai/dsh-session'
 
 const port = process.argv[2]
 if (port === undefined) throw new Error('Hub Agent fixture requires a port')
+const endpointId = (process.argv[3] ?? 'remote:registered-agent') as `remote:${string}`
+const workspaceId = process.argv[4] ?? 'workspace-agent'
 
 const agent = new HubEndpointAgent({
   uri: `ws://127.0.0.1:${port}/hub`,
-  endpointId: 'remote:registered-agent',
+  endpointId,
   token: 'agent-secret',
   serverInfo: { name: 'registered-agent', version: '0.1.0' },
+  apiProxy: {
+    sessions: {
+      history: async (request: unknown) => ({ ok: true, value: { request, source: endpointId } }),
+    },
+  },
 })
-const workspaces = [{
-  id: 'workspace-agent',
-  title: 'Registered Agent Workspace',
+const workspaces: HubEndpointSummary['workspaces'] = [{
+  endpointId,
+  id: workspaceId,
+  title: `${endpointId} Workspace`,
   path: 'D:/agent/project',
-  sessions: [],
+  sessions: [{
+    endpointId,
+    sessionId: 'shared-session' as SessionId,
+    updatedAt: 1,
+    running: false,
+    blank: false,
+  }],
 }]
 
 await agent.connect(workspaces)

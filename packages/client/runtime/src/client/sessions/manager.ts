@@ -132,6 +132,8 @@ function questionInteractionStatus(
 export class SessionManager {
   private readonly sessions = new Map<SessionId, Session>()
   private readonly remoteSessions = new Map<SessionId, SessionTransport>()
+  /** Workspace owner for each projected remote session. */
+  private readonly remoteWorkspaceIds = new Map<SessionId, string>()
   /** Remote sessions currently included by the selected workspace projection. */
   private readonly visibleRemoteSessions = new Set<SessionId>()
   private readonly remoteSubscriptions = new Map<SessionId, () => void>()
@@ -234,7 +236,7 @@ export class SessionManager {
       const ref = parseQualifiedSessionId(sessionId)
       if (ref === undefined) continue
       const transport = registry.resolve(ref)
-      const sessionTransport = remoteSessionTransport(transport, ref)
+      const sessionTransport = remoteSessionTransport(transport, ref, this.remoteWorkspaceFor(sessionId))
       this.remoteSessions.set(sessionId, sessionTransport)
       this.sessions.get(sessionId)?.installTransport(sessionTransport)
     }
@@ -282,7 +284,7 @@ export class SessionManager {
       this.remoteSessions.set(address.childSessionId, remoteSessionTransport(transport, {
         endpointId: parentRef.endpointId,
         sessionId: address.childSessionId,
-      }))
+      }, this.remoteWorkspaceFor(address.parentSessionId)))
     }
     this.addresses.set(address.childSessionId, address)
     this.sessions.get(address.childSessionId)?.configureSubagent(address, catalog?.parentAvailable ?? false)
@@ -385,7 +387,7 @@ export class SessionManager {
     if (remoteTransport === undefined && ref !== undefined) {
       const transport = this.remoteRegistry?.resolve(ref)
       if (transport === undefined) throw new Error(`remote endpoint unavailable: ${ref.endpointId}`)
-      remoteTransport = remoteSessionTransport(transport, ref)
+      remoteTransport = remoteSessionTransport(transport, ref, this.remoteWorkspaceFor(sessionId))
       this.remoteSessions.set(sessionId, remoteTransport)
     }
     return new Session(sessionId, this.api, this.remote, {
@@ -424,7 +426,8 @@ export class SessionManager {
         const transport = this.remoteRegistry?.resolve(ref)
         if (transport === undefined) continue
         next.add(id)
-        const sessionTransport = remoteSessionTransport(transport, ref)
+        this.remoteWorkspaceIds.set(id, workspace.workspaceId)
+        const sessionTransport = remoteSessionTransport(transport, ref, workspace.workspaceId)
         this.remoteSessions.set(id, sessionTransport)
         this.sessions.get(id)?.installTransport(sessionTransport)
         this.remoteSubscriptions.get(id)?.()
@@ -506,7 +509,7 @@ export class SessionManager {
           ? (await this.api.subagents.list({ parentSessionId })).result
           : remoteTransport === undefined
             ? { ok: false as const, error: { code: 'internal' as const, message: `remote endpoint unavailable: ${remoteParent.endpointId}`, details: {} } }
-            : await remoteTransport.subagentList(remoteParent.sessionId)
+            : await remoteTransport.subagentList(this.remoteWorkspaceFor(parentSessionId), remoteParent.sessionId)
         if (result.ok) {
           const entries = remoteParent === undefined
             ? result.value.entries
@@ -741,7 +744,7 @@ export class SessionManager {
           sessionId: opts.sessionId,
           ...opts.atSeq === undefined ? {} : { atSeq: opts.atSeq },
         })).result
-        : await this.remoteRegistry?.resolve(ref).fork(ref.sessionId, opts.atSeq) ?? {
+        : await this.remoteRegistry?.resolve(ref).fork(this.remoteWorkspaceFor(opts.sessionId), ref.sessionId, opts.atSeq) ?? {
           ok: false as const,
           error: { code: 'internal', message: 'remote endpoint unavailable', details: {} },
         }
@@ -757,7 +760,7 @@ export class SessionManager {
           if (transport !== undefined) this.remoteSessions.set(qualifiedChildId, remoteSessionTransport(transport, {
             endpointId: ref.endpointId,
             sessionId: childId,
-          }))
+          }, this.remoteWorkspaceFor(opts.sessionId)))
         }
         this.recordMutation({ kind: 'upsert', summary: {
           sessionId: qualifiedChildId, updatedAt: Date.now(), running: false, blank: false,
@@ -772,6 +775,12 @@ export class SessionManager {
     } catch (error) {
       return transportError(error)
     }
+  }
+
+  private remoteWorkspaceFor(sessionId: SessionId): string {
+    const workspaceId = this.remoteWorkspaceIds.get(sessionId)
+    if (workspaceId === undefined) throw new Error(`remote workspace unavailable for session ${String(sessionId)}`)
+    return workspaceId
   }
 
   /**

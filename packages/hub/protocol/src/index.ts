@@ -17,6 +17,7 @@ export type {
   HubAgentMessageResult,
   HubAgentRegisterParams,
   HubAgentRegisterResult,
+  HubApiRequestParams,
   HubCapabilities,
   HubConnectionState,
   HubCreateParams,

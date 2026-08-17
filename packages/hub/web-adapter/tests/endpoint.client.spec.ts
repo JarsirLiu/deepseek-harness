@@ -106,7 +106,7 @@ describe('Hub Web adapter endpoint ownership', () => {
       } },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     try {
-      const result = await createRemoteSessionTransport('remote:first').history('session-1' as SessionId, { maxMessages: 5 })
+      const result = await createRemoteSessionTransport('remote:first').history('workspace-a', 'session-1' as SessionId, { maxMessages: 5 })
       expect(result).toMatchObject({
         ok: true,
         value: {
@@ -119,7 +119,7 @@ describe('Hub Web adapter endpoint ownership', () => {
       expect(fetch.mock.calls[0]?.[1]).toMatchObject({ method: 'POST' })
       expect(requestBody(fetch.mock.calls[0]?.[1] as RequestInit)).toEqual({
         method: 'hub/api/request',
-        params: { method: 'session.history', payload: { sessionId: 'session-1', maxMessages: 5 } },
+        params: { endpointId: 'remote:first', workspaceId: 'workspace-a', method: 'session.history', payload: { sessionId: 'session-1', maxMessages: 5 } },
       })
     } finally {
       fetch.mockRestore()
@@ -131,7 +131,7 @@ describe('Hub Web adapter endpoint ownership', () => {
       result: { ok: true, value: { events: [], hasMore: false } },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     try {
-      await expect(createRemoteSessionTransport('remote:first').history('session-1' as SessionId, {}))
+      await expect(createRemoteSessionTransport('remote:first').history('workspace-a', 'session-1' as SessionId, {}))
         .resolves.toEqual({ ok: true, value: { events: [], hasMore: false } })
     } finally {
       fetch.mockRestore()
@@ -141,7 +141,7 @@ describe('Hub Web adapter endpoint ownership', () => {
   it('returns history transport errors without rewriting them', async () => {
     const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 400 }))
     try {
-      await expect(createRemoteSessionTransport('remote:first').history('session-1' as SessionId, {}))
+      await expect(createRemoteSessionTransport('remote:first').history('workspace-a', 'session-1' as SessionId, {}))
         .resolves.toMatchObject({ ok: false, error: { message: 'HTTP 400' } })
     } finally {
       fetch.mockRestore()
@@ -159,7 +159,7 @@ describe('Hub Web adapter endpoint ownership', () => {
       result: { ok: true, value: catalog },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     try {
-      await expect(createRemoteSessionTransport('remote:first').models('session-1' as SessionId))
+      await expect(createRemoteSessionTransport('remote:first').models('workspace-a', 'session-1' as SessionId))
         .resolves.toEqual({ ok: true, value: catalog })
     } finally {
       fetch.mockRestore()
@@ -172,7 +172,7 @@ describe('Hub Web adapter endpoint ownership', () => {
       result: { ok: true, value: { selected } },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     try {
-      await expect(createRemoteSessionTransport('remote:first').selectModel('session-1' as SessionId, selected))
+      await expect(createRemoteSessionTransport('remote:first').selectModel('workspace-a', 'session-1' as SessionId, selected))
         .resolves.toEqual({ ok: true, value: { selected } })
     } finally {
       fetch.mockRestore()
@@ -185,7 +185,7 @@ describe('Hub Web adapter endpoint ownership', () => {
       headers: { 'Content-Type': 'application/json' },
     }))
     try {
-      await expect(createRemoteSessionTransport('remote:first').models('session-1' as SessionId))
+      await expect(createRemoteSessionTransport('remote:first').models('workspace-a', 'session-1' as SessionId))
         .resolves.toMatchObject({ ok: false, error: { code: 'internal', message: 'Hub API response is missing result' } })
     } finally {
       fetch.mockRestore()
@@ -193,12 +193,12 @@ describe('Hub Web adapter endpoint ownership', () => {
   })
 
   it.each([
-    ['prompt', (transport: ReturnType<typeof createRemoteSessionTransport>) => transport.prompt('session-1' as SessionId, [{ type: 'text', text: 'hello' }], 'queue')],
-    ['cancel', (transport: ReturnType<typeof createRemoteSessionTransport>) => transport.cancel('session-1' as SessionId)],
-    ['rename', (transport: ReturnType<typeof createRemoteSessionTransport>) => transport.rename('session-1' as SessionId, 'Renamed')],
-    ['updateQueue', (transport: ReturnType<typeof createRemoteSessionTransport>) => transport.updateQueue('session-1' as SessionId, 'message-1' as never, { kind: 'remove' })],
-    ['fork', (transport: ReturnType<typeof createRemoteSessionTransport>) => transport.fork('session-1' as SessionId, 3)],
-    ['subagentList', (transport: ReturnType<typeof createRemoteSessionTransport>) => transport.subagentList('session-1' as SessionId)],
+    ['prompt', (transport: ReturnType<typeof createRemoteSessionTransport>) => transport.prompt('workspace-a', 'session-1' as SessionId, [{ type: 'text', text: 'hello' }], 'queue')],
+    ['cancel', (transport: ReturnType<typeof createRemoteSessionTransport>) => transport.cancel('workspace-a', 'session-1' as SessionId)],
+    ['rename', (transport: ReturnType<typeof createRemoteSessionTransport>) => transport.rename('workspace-a', 'session-1' as SessionId, 'Renamed')],
+    ['updateQueue', (transport: ReturnType<typeof createRemoteSessionTransport>) => transport.updateQueue('workspace-a', 'session-1' as SessionId, 'message-1' as never, { kind: 'remove' })],
+    ['fork', (transport: ReturnType<typeof createRemoteSessionTransport>) => transport.fork('workspace-a', 'session-1' as SessionId, 3)],
+    ['subagentList', (transport: ReturnType<typeof createRemoteSessionTransport>) => transport.subagentList('workspace-a', 'session-1' as SessionId)],
   ])('unwraps the official RpcResult for %s', async (_name, invoke) => {
     const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({
       result: { ok: true, value: { accepted: true } },
@@ -214,7 +214,7 @@ describe('Hub Web adapter endpoint ownership', () => {
   it('normalizes HTTP failures to the same RpcResult error format', async () => {
     const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 502 }))
     try {
-      await expect(createRemoteSessionTransport('remote:first').prompt('session-1' as SessionId, [], 'queue'))
+      await expect(createRemoteSessionTransport('remote:first').prompt('workspace-a', 'session-1' as SessionId, [], 'queue'))
         .resolves.toMatchObject({ ok: false, error: { code: 'internal', message: 'HTTP 502' } })
     } finally {
       fetch.mockRestore()
@@ -228,16 +228,22 @@ describe('Hub Web adapter endpoint ownership', () => {
     const transport = createRemoteSessionTransport('remote:first')
     const address = { parentSessionId: 'parent' as SessionId, childSessionId: 'child' as SessionId, mode: 'continuable' as const }
     try {
-      await transport.readAttachment('session-1' as SessionId, 'attachment-1' as never)
-      await transport.archiveSession('session-1' as SessionId)
-      await transport.subagentHistory(address, { maxMessages: 4 })
-      await transport.subagentPrompt(address, [{ type: 'text', text: 'hello' }])
-      await transport.subagentInterrupt(address)
+      await transport.readAttachment('workspace-a', 'session-1' as SessionId, 'attachment-1' as never)
+      await transport.archiveSession('workspace-a', 'session-1' as SessionId)
+      await transport.subagentHistory('workspace-a', address, { maxMessages: 4 })
+      await transport.subagentPrompt('workspace-a', address, [{ type: 'text', text: 'hello' }])
+      await transport.subagentInterrupt('workspace-a', address)
       const methods = fetch.mock.calls.map(call => requestBody(call[1] as RequestInit).params.method)
       expect(methods).toEqual([
         'session.attachment', 'workspace.archiveSession', 'subagent.history',
         'subagent.prompt', 'subagent.interrupt',
       ])
+      for (const call of fetch.mock.calls) {
+        expect(requestBody(call[1] as RequestInit).params).toMatchObject({
+          endpointId: 'remote:first',
+          workspaceId: 'workspace-a',
+        })
+      }
     } finally {
       fetch.mockRestore()
     }
@@ -294,7 +300,7 @@ describe('Hub Web adapter endpoint ownership', () => {
       result: { ok: true, value: { sessionId: 'forked' } },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     try {
-      await createRemoteSessionTransport('remote:first').fork('session-1' as SessionId)
+      await createRemoteSessionTransport('remote:first').fork('workspace-a', 'session-1' as SessionId)
       expect(requestBody(fetch.mock.calls[0]?.[1] as RequestInit).params.payload)
         .toEqual({ sessionId: 'session-1' })
     } finally {

@@ -51,6 +51,8 @@ export interface HubLoadResult {
 
 /** One directory registered on the remote Hub. */
 export interface HubWorkspaceEntry {
+  /** Stable identity of the endpoint that owns this workspace. */
+  endpointId: `remote:${string}`
   /** Stable workspace identifier owned by the remote device. */
   id: string
   /** Display name for the remote workspace. */
@@ -116,6 +118,18 @@ export interface HubAgentRegisterParams {
 export interface HubAgentRegisterResult {
   endpointId: `remote:${string}`
   brokerInfo: { name: string; version: string }
+}
+
+/** Parameters for an API request addressed to one endpoint workspace. */
+export interface HubApiRequestParams {
+  /** Endpoint that owns the workspace. */
+  endpointId: `remote:${string}`
+  /** Workspace that owns the requested resource. */
+  workspaceId: string
+  /** Host API method name. */
+  method: string
+  /** Host API method payload. */
+  payload: Record<string, unknown>
 }
 
 /** Parameters for creating a session in a remote workspace. */
@@ -292,6 +306,7 @@ export interface HubRequestMap {
   'hub/handshake': { params: HubHandshakeParams; result: HubHandshakeResult }
   'hub/agent/register': { params: HubAgentRegisterParams; result: HubAgentRegisterResult }
   'hub/agent/publish-workspaces': { params: { workspaces: HubWorkspaceEntry[] }; result: HubAppendResult }
+  'hub/api/request': { params: HubApiRequestParams; result: unknown }
   'hub/list': { params: HubListParams; result: HubListResult }
   'hub/list-endpoints': { params: Record<string, never>; result: HubEndpointListResult }
   'hub/workspaces': { params: { workspaceIds?: string[] }; result: HubWorkspaceListResult }

@@ -17,7 +17,7 @@ Hub Web bundle 所有的浏览器传输层。它为每个远程会话保留所�
 ##### 远程操作范围
 
 ```markdown
-Remote session history, prompts, cancellation, model selection, queue updates, attachments, forks, subagents, workspace actions, and live events are routed through the owning Host.
+Remote session history, prompts, cancellation, model selection, queue updates, attachments, forks, subagents, workspace actions, and live events are routed through the owning Host. Every API request carries both the owning `endpointId` and selected `workspaceId`; the adapter never infers either value from a session id.
 ```
 
 #### Token effect

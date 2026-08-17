@@ -17,7 +17,7 @@ Remote sessions expose the same session-facing operations as local sessions; the
 ##### Remote operation scope
 
 ```markdown
-Remote session history, prompts, cancellation, model selection, queue updates, attachments, forks, subagents, workspace actions, and live events are routed through the owning Host.
+Remote session history, prompts, cancellation, model selection, queue updates, attachments, forks, subagents, workspace actions, and live events are routed through the owning Host. Every API request carries both the owning `endpointId` and selected `workspaceId`; the adapter never infers either value from a session id.
 ```
 
 #### Token effect

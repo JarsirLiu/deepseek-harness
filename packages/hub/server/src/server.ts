@@ -18,6 +18,7 @@ import {
   type HubHandshakeResult,
   type HubCapabilities,
   type HubAgentRegisterParams,
+  type HubApiRequestParams,
   type HubEndpointSummary,
   type HubWorkspaceEntry,
   type HubEventNotification,
@@ -224,7 +225,7 @@ export class HubServer {
       case 'hub/workspaces':
         return await this.handleWorkspaces(params)
       case 'hub/api/request':
-        return await this.handleApiRequest(params as { method: string; payload: Record<string, unknown> })
+        return await this.handleApiRequest(parseApiRequestParams(params))
       case 'hub/subscribe':
         return this.handleSubscribe(client, params)
       case 'hub/unsubscribe':
@@ -373,7 +374,7 @@ export class HubServer {
       archivedSessionIds: readonly SessionId[]
     } | undefined
     const api = this.ctx.get('apiProxy') as {
-      sessions: {
+      sessions?: {
         list: (request: {
           rpcId: string
           payload: Record<string, never>
@@ -396,7 +397,7 @@ export class HubServer {
         }>
       }
     } | undefined
-    const summaries = api === undefined
+    const summaries = api === undefined || api.sessions === undefined
       ? []
       : await api.sessions.list({ rpcId: `hub-workspaces-${Date.now()}`, payload: {} }).then((response) => {
         if (!response.result.ok) throw new Error(`remote session listing failed: ${JSON.stringify(response.result.error)}`)
@@ -406,7 +407,7 @@ export class HubServer {
       if (typeof summary.projections?.values?.title === 'string' && summary.projections.values.title !== '') {
         return [String(summary.sessionId), summary] as const
       }
-      const history = api === undefined
+      const history = api === undefined || api.sessions === undefined
         ? undefined
         : await api.sessions.history({
           rpcId: `hub-workspace-history-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -418,38 +419,65 @@ export class HubServer {
         ? { ...summary, projections: { ...summary.projections, values: { ...summary.projections?.values, title } } }
         : summary] as const
     })))
-    const archived = new Set(registry?.archivedSessionIds ?? [])
+    const archived = registry === undefined ? new Set<SessionId>() : new Set(registry.archivedSessionIds)
     const selected = params.workspaceIds === undefined ? undefined : new Set(params.workspaceIds)
-    return {
-      endpointId: this.config.endpointId,
-      workspaces: registry?.list().filter(workspace => selected === undefined || selected.has(workspace.id)).map(workspace => ({
+    const localWorkspaces = registry === undefined
+      ? []
+      : registry.list().map(workspace => ({
+        endpointId: this.config.endpointId,
         id: workspace.id,
         title: workspace.title,
         path: workspace.path,
-        sessions: workspace.sessionIds.flatMap((sessionId) => {
-          if (archived.has(sessionId)) return []
-          const summary = byId.get(String(sessionId))
-          if (summary === undefined) return []
-          const title = summary.projections?.values?.title
-          return [{
-            sessionId: summary.sessionId,
-            endpointId: this.config.endpointId,
-            updatedAt: summary.updatedAt,
-            running: summary.running,
-            blank: summary.blank,
-            ...(summary.cwd === undefined ? {} : { cwd: summary.cwd }),
-            ...(typeof title === 'string' && title !== '' ? { title } : {}),
-            ...(summary.agentPreset === undefined ? {} : { agentPreset: summary.agentPreset }),
-            ...(summary.parentSessionId === undefined ? {} : { parentSessionId: summary.parentSessionId }),
-            ...(summary.origin === undefined ? {} : { origin: summary.origin }),
-          }]
-        }),
-      })) ?? [],
+        sessions: workspace.sessionIds,
+      }))
+    const agentWorkspaces = [...this.clients.values()].flatMap(client =>
+      client.role === 'agent' ? client.workspaces ?? [] : [])
+    return {
+      endpointId: this.config.endpointId,
+      workspaces: [...localWorkspaces, ...agentWorkspaces]
+        .filter(workspace => selected === undefined || selected.has(workspace.id))
+        .map(workspace => ({
+          ...workspace,
+          sessions: workspace.sessions.flatMap((sessionOrId) => {
+            const sessionId = typeof sessionOrId === 'string' ? sessionOrId : sessionOrId.sessionId
+            if (archived.has(sessionId)) return []
+            const summary = typeof sessionOrId === 'string' ? byId.get(String(sessionId)) : sessionOrId
+            if (summary === undefined) return []
+            const title = 'projections' in summary
+              ? summary.projections.values?.title
+              : 'title' in summary ? summary.title : undefined
+            return [{
+              sessionId: summary.sessionId,
+              endpointId: workspace.endpointId,
+              updatedAt: summary.updatedAt,
+              running: summary.running,
+              blank: summary.blank,
+              ...(summary.cwd === undefined ? {} : { cwd: summary.cwd }),
+              ...(typeof title === 'string' && title !== '' ? { title } : {}),
+              ...(summary.agentPreset === undefined ? {} : { agentPreset: summary.agentPreset }),
+              ...(summary.parentSessionId === undefined ? {} : { parentSessionId: summary.parentSessionId }),
+              ...(summary.origin === undefined ? {} : { origin: summary.origin }),
+            }]
+          }),
+        })),
     }
   }
 
   /** Forward a typed Host API request without changing its result payload. */
-  private async handleApiRequest(params: { method: string; payload: Record<string, unknown> }): Promise<unknown> {
+  private async handleApiRequest(params: HubApiRequestParams): Promise<unknown> {
+    if (params.endpointId !== this.config.endpointId) {
+      const agent = [...this.clients.values()].find(client => client.role === 'agent' && client.endpointId === params.endpointId)
+      if (agent === undefined) throw new Error(`remote endpoint unavailable: ${params.endpointId}`)
+      if (!agent.workspaces?.some(workspace => workspace.id === params.workspaceId)) {
+        throw new Error(`remote workspace unavailable: ${params.endpointId}/${params.workspaceId}`)
+      }
+      return await agent.transport.request('hub/api/request', params)
+    }
+    const registry = this.ctx.get('workspaceRegistry') as { list: () => Array<{ id: string }> } | undefined
+    if (registry === undefined) throw new Error('local workspace registry is unavailable')
+    if (!registry.list().some(workspace => workspace.id === params.workspaceId)) {
+      throw new Error(`local workspace unavailable: ${params.workspaceId}`)
+    }
     const allowed = new Set([
       'session.list', 'session.create', 'session.history', 'session.models', 'session.selectModel',
       'session.rename', 'session.fork', 'session.prompt', 'session.attachment', 'session.updateQueue',
@@ -507,6 +535,21 @@ export class HubServer {
   }
 }
 
+function parseApiRequestParams(params: Record<string, unknown>): HubApiRequestParams {
+  if (typeof params.endpointId !== 'string' || !/^remote:[^\s]+$/u.test(params.endpointId)
+    || typeof params.workspaceId !== 'string' || params.workspaceId === ''
+    || typeof params.method !== 'string' || params.method === ''
+    || !isRecord(params.payload)) {
+    throw new Error('invalid Hub API request')
+  }
+  return {
+    endpointId: params.endpointId as `remote:${string}`,
+    workspaceId: params.workspaceId,
+    method: params.method,
+    payload: params.payload,
+  }
+}
+
 function requireEndpointId(endpointId: `remote:${string}`): `remote:${string}` {
   if (!/^remote:[^\s]+$/u.test(endpointId)) throw new Error(`invalid Hub endpoint identity: ${endpointId}`)
   return endpointId
@@ -536,6 +579,8 @@ function parseWorkspaces(value: unknown): HubWorkspaceEntry[] {
   if (!Array.isArray(value)) throw new Error('invalid Endpoint Agent workspace directory')
   return value.map((workspace) => {
     if (!isRecord(workspace)
+      || typeof workspace.endpointId !== 'string'
+      || !/^remote:[^\s]+$/u.test(workspace.endpointId)
       || typeof workspace.id !== 'string'
       || typeof workspace.title !== 'string'
       || typeof workspace.path !== 'string'

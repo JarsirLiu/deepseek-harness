@@ -81,32 +81,36 @@ export interface RemoteSessionTransport {
   readonly endpointId: `remote:${string}`
   owns(ref: SessionRef): boolean
   history(
+    workspaceId: string,
     sessionId: SessionId,
     payload: { beforeSeq?: number; maxMessages?: number },
   ): Promise<RpcResult<{ events: HistoryEntry[]; hasMore: boolean }>>
   prompt(
+    workspaceId: string,
     sessionId: SessionId,
     content: PromptContentPart[],
     mode: 'queue' | 'steer',
   ): Promise<RpcResult<{ accepted: true }>>
-  cancel(sessionId: SessionId): Promise<RpcResult<{ accepted: true }>>
-  models(sessionId: SessionId): Promise<RpcResult<SessionModels>>
-  selectModel(sessionId: SessionId, selection: ModelSelection): Promise<RpcResult<{ selected: ModelSelection }>>
-  rename(sessionId: SessionId, title: string): Promise<RpcResult<{ title: string; seq: number }>>
-  updateQueue(sessionId: SessionId, itemId: MessageId, action: QueueAction): Promise<RpcResult<{ accepted: true }>>
+  cancel(workspaceId: string, sessionId: SessionId): Promise<RpcResult<{ accepted: true }>>
+  models(workspaceId: string, sessionId: SessionId): Promise<RpcResult<SessionModels>>
+  selectModel(workspaceId: string, sessionId: SessionId, selection: ModelSelection): Promise<RpcResult<{ selected: ModelSelection }>>
+  rename(workspaceId: string, sessionId: SessionId, title: string): Promise<RpcResult<{ title: string; seq: number }>>
+  updateQueue(workspaceId: string, sessionId: SessionId, itemId: MessageId, action: QueueAction): Promise<RpcResult<{ accepted: true }>>
   readAttachment(
+    workspaceId: string,
     sessionId: SessionId,
     attachmentId: AttachmentIdType,
   ): Promise<RpcResult<{ attachment: ImageAttachmentRef; data: string }>>
-  fork(sessionId: SessionId, atSeq?: number): Promise<RpcResult<{ sessionId: SessionId }>>
-  archiveSession(sessionId: SessionId): Promise<RpcResult<{ archivedSessionIds: SessionId[] }>>
-  subagentList(parentSessionId: SessionId): Promise<RpcResult<SubagentCatalog>>
+  fork(workspaceId: string, sessionId: SessionId, atSeq?: number): Promise<RpcResult<{ sessionId: SessionId }>>
+  archiveSession(workspaceId: string, sessionId: SessionId): Promise<RpcResult<{ archivedSessionIds: SessionId[] }>>
+  subagentList(workspaceId: string, parentSessionId: SessionId): Promise<RpcResult<SubagentCatalog>>
   subagentHistory(
+    workspaceId: string,
     address: SubagentAddress,
     payload: { beforeSeq?: number; maxMessages?: number },
   ): Promise<RpcResult<{ events: HistoryEntry[]; hasMore: boolean }>>
-  subagentPrompt(address: Extract<SubagentAddress, { mode: 'continuable' }>, content: PromptContentPart[]): Promise<RpcResult<SubagentPromptReceipt>>
-  subagentInterrupt(address: Extract<SubagentAddress, { mode: 'continuable' }>): Promise<RpcResult<SubagentInterruptReceipt>>
+  subagentPrompt(workspaceId: string, address: Extract<SubagentAddress, { mode: 'continuable' }>, content: PromptContentPart[]): Promise<RpcResult<SubagentPromptReceipt>>
+  subagentInterrupt(workspaceId: string, address: Extract<SubagentAddress, { mode: 'continuable' }>): Promise<RpcResult<SubagentInterruptReceipt>>
   subscribe(sessionId: SessionId, listener: (frame: MuxFrame) => void): () => void
   subscribeHost(listener: (frame: HostFrame) => void): () => void
 }
@@ -212,8 +216,9 @@ export function createRemoteSessionTransport(endpointId: SessionEndpointId | (()
   return {
     get endpointId() { return resolveEndpoint() as `remote:${string}` },
     owns: ref => ref.endpointId === resolveEndpoint(),
-    history: async (sessionId, payload) => {
+    history: async (workspaceId, sessionId, payload) => {
       const result = await call<RemoteHistoryResponse>('hub/api/request', {
+        endpointId: resolveEndpoint(), workspaceId,
         method: 'session.history',
         payload: { sessionId, ...payload },
       })
@@ -227,19 +232,19 @@ export function createRemoteSessionTransport(endpointId: SessionEndpointId | (()
         },
       }
     },
-    prompt: (sessionId, content, mode) => call('hub/api/request', { method: 'session.prompt', payload: { sessionId, content, mode } }),
-    cancel: sessionId => call('hub/api/request', { method: 'session.cancel', payload: { sessionId } }),
-    models: sessionId => call('hub/api/request', { method: 'session.models', payload: { sessionId } }),
-    selectModel: (sessionId, selection) => call('hub/api/request', { method: 'session.selectModel', payload: { sessionId, ...selection } }),
-    rename: (sessionId, title) => call('hub/api/request', { method: 'session.rename', payload: { sessionId, title } }),
-    updateQueue: (sessionId, itemId, action) => call('hub/api/request', { method: 'session.updateQueue', payload: { sessionId, itemId, action } }),
-    readAttachment: (sessionId, attachmentId) => call('hub/api/request', { method: 'session.attachment', payload: { sessionId, attachmentId } }),
-    fork: (sessionId, atSeq) => call('hub/api/request', { method: 'session.fork', payload: { sessionId, ...(atSeq === undefined ? {} : { atSeq }) } }),
-    archiveSession: sessionId => call('hub/api/request', { method: 'workspace.archiveSession', payload: { sessionId } }),
-    subagentList: parentSessionId => call('hub/api/request', { method: 'subagent.list', payload: { parentSessionId } }),
-    subagentHistory: (address, payload) => call('hub/api/request', { method: 'subagent.history', payload: { ...address, ...payload } }),
-    subagentPrompt: (address, content) => call('hub/api/request', { method: 'subagent.prompt', payload: { ...address, content } }),
-    subagentInterrupt: address => call('hub/api/request', { method: 'subagent.interrupt', payload: address }),
+    prompt: (workspaceId, sessionId, content, mode) => call('hub/api/request', { endpointId: resolveEndpoint(), workspaceId, method: 'session.prompt', payload: { sessionId, content, mode } }),
+    cancel: (workspaceId, sessionId) => call('hub/api/request', { endpointId: resolveEndpoint(), workspaceId, method: 'session.cancel', payload: { sessionId } }),
+    models: (workspaceId, sessionId) => call('hub/api/request', { endpointId: resolveEndpoint(), workspaceId, method: 'session.models', payload: { sessionId } }),
+    selectModel: (workspaceId, sessionId, selection) => call('hub/api/request', { endpointId: resolveEndpoint(), workspaceId, method: 'session.selectModel', payload: { sessionId, ...selection } }),
+    rename: (workspaceId, sessionId, title) => call('hub/api/request', { endpointId: resolveEndpoint(), workspaceId, method: 'session.rename', payload: { sessionId, title } }),
+    updateQueue: (workspaceId, sessionId, itemId, action) => call('hub/api/request', { endpointId: resolveEndpoint(), workspaceId, method: 'session.updateQueue', payload: { sessionId, itemId, action } }),
+    readAttachment: (workspaceId, sessionId, attachmentId) => call('hub/api/request', { endpointId: resolveEndpoint(), workspaceId, method: 'session.attachment', payload: { sessionId, attachmentId } }),
+    fork: (workspaceId, sessionId, atSeq) => call('hub/api/request', { endpointId: resolveEndpoint(), workspaceId, method: 'session.fork', payload: { sessionId, ...(atSeq === undefined ? {} : { atSeq }) } }),
+    archiveSession: (workspaceId, sessionId) => call('hub/api/request', { endpointId: resolveEndpoint(), workspaceId, method: 'workspace.archiveSession', payload: { sessionId } }),
+    subagentList: (workspaceId, parentSessionId) => call('hub/api/request', { endpointId: resolveEndpoint(), workspaceId, method: 'subagent.list', payload: { parentSessionId } }),
+    subagentHistory: (workspaceId, address, payload) => call('hub/api/request', { endpointId: resolveEndpoint(), workspaceId, method: 'subagent.history', payload: { ...address, ...payload } }),
+    subagentPrompt: (workspaceId, address, content) => call('hub/api/request', { endpointId: resolveEndpoint(), workspaceId, method: 'subagent.prompt', payload: { ...address, content } }),
+    subagentInterrupt: (workspaceId, address) => call('hub/api/request', { endpointId: resolveEndpoint(), workspaceId, method: 'subagent.interrupt', payload: address }),
     subscribe: (sessionId, listener) => {
       const key = String(sessionId)
       const listeners = eventListeners.get(key) ?? new Set<(frame: MuxFrame) => void>()
