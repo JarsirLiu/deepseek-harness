@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-08-17-replaceable-hub-endpoint-routing.md
+2026-08-17-replaceable-hub-endpoint-routing.md: ddbb556d83a9a7a403a36b3fcd454afbb3937ac0
+2026-08-17-replaceable-hub-endpoint-routing.zh.md: dfa1898cff7c895c68142ff4f5b8be1c80507fca

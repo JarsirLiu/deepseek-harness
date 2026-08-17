@@ -20,11 +20,25 @@ Web client
   └── remote endpoint B
 ```
 
+The same Endpoint may use a different Broker without changing its identity or resource ownership:
+
+```text
+Endpoint A ─┐                 ┌── Hub X
+Endpoint B ─┼── current ──────┤
+Endpoint C ─┘                 └── Hub Y (replacement)
+```
+
 The Broker manages Endpoint Agent and Web client connections independently. Authentication identity, endpoint registration, workspace subscriptions, session subscriptions, and event cleanup are scoped to the connection. A client-provided endpoint label is not an authentication identity.
 
-An Endpoint Agent registers its endpoint with the Broker, publishes workspace summaries, and receives API requests for its own Host. The Broker stores endpoint presence and directory metadata, applies access policy, and forwards requests and Host event frames. Session logs, projects, models, and other Host state remain owned by the Endpoint Agent.
+An Endpoint Agent registers its endpoint with the Broker, publishes workspace summaries, and receives API requests for its own Host. The Broker stores endpoint presence and directory metadata, applies access policy, and forwards requests and Host event frames. Session logs, workspaces, models, and other Host state remain owned by the Endpoint.
 
-The single-host deployment remains valid: a Hub Server can run beside one Host as an Endpoint Agent and accept Web clients. Multi-endpoint discovery requires the Broker role and an Agent connection from every participating Host.
+Any node may run the Broker role alongside its own Host. A single-host deployment remains valid, and a dedicated Broker may run without owning a Host. Multi-endpoint discovery requires the Broker role and an Agent connection from every participating Host. Endpoints reach one another through authorized Host API calls routed by the Broker; the Broker does not provide arbitrary network access between endpoints.
+
+## Replaceable Hubs
+
+The Broker is a replaceable connection facility, not the owner of endpoint resources. An Endpoint can disconnect from one Broker and connect to another without moving or copying its workspaces, sessions, models, or session logs. The new Broker receives a fresh connection authorization and a new directory publication; the Endpoint and its resources retain their identities.
+
+An Endpoint may connect to one or more Brokers when a deployment requires redundancy or separate access domains. A deployment that only requires Hub replacement needs one active Broker connection at a time. Hub federation, automatic failover, and cross-Broker discovery are separate capabilities and are not implied by Endpoint connectivity.
 
 ## Registration and Authentication
 
@@ -34,7 +48,7 @@ The Broker uses separate credentials for its roles:
 - **Enrollment credential** is used once by an Endpoint Agent to register a new endpoint.
 - **Endpoint credential** is issued by the Broker and stored by the Agent for later reconnects.
 
-The Broker assigns a stable `endpointId` during registration. An endpoint credential is unique to that endpoint and is never exposed to the browser. A shared enrollment token is suitable for local development or one-time registration only; it is not a permanent identity for every endpoint.
+Each Endpoint owns a stable `endpointId`, created locally or assigned by an identity service. Registering with a Broker associates that identity with a Broker-specific connection credential; changing Brokers does not create a new Endpoint identity. An endpoint credential is unique to one Endpoint-to-Broker relationship and is never exposed to the browser. A shared enrollment token is suitable for local development or one-time registration only; it is not a permanent identity for every endpoint.
 
 Registration follows this sequence:
 
@@ -47,7 +61,7 @@ Web client -> Broker: authenticate with client credential
 Web client -> Broker: list authorized endpoints and workspaces
 ```
 
-The Broker checks the client identity, `endpointId`, `workspaceId`, and API method for every forwarded request. Connecting to the Broker does not grant access to every endpoint or workspace.
+The Broker checks the client identity, Endpoint, resource reference, and API method for every forwarded request. Connecting to the Broker does not grant access to every endpoint or workspace. Endpoint identity and connection authorization are separate: a client may authorize the same Endpoint through a different Broker without changing the Endpoint identity.
 
 ## Endpoint Identity
 
@@ -60,7 +74,19 @@ type SessionRef = {
 }
 ```
 
-All session, workspace, model, subagent, and event operations resolve a transport from `endpointId`. A bare session ID is not a cross-endpoint key.
+All session, workspace, model, subagent, and event operations use a reference containing the owning `endpointId` and the resource ID. A bare session ID or workspace ID is not a cross-endpoint key. Workspace IDs, session IDs, and subagent IDs are authoritative only within their owning Endpoint.
+
+```ts
+type WorkspaceRef = {
+  endpointId: string
+  workspaceId: string
+}
+
+type SessionRef = {
+  endpointId: string
+  sessionId: SessionId
+}
+```
 
 The local endpoint uses the normal Host API transport. A remote endpoint uses the same API contract through the Hub transport. The Hub forwards requests and Host event frames; it does not maintain a second session business model.
 
@@ -77,7 +103,7 @@ hub.endpoints:
     enabled: true
 ```
 
-Hub server settings belong to the host that publishes its sessions:
+Hub listener settings belong to the node that runs the Broker:
 
 ```yaml
 hub.server:
@@ -88,18 +114,22 @@ hub.server:
   credentialRef: hub-server-token
 ```
 
+Endpoint Agent settings belong to the Host that owns the workspaces and sessions it publishes. Remote connection settings and selected remote workspaces belong to the client profile. Changing the Broker changes connection settings and credentials, not ownership of the published resources.
+
 Credentials are stored through the Harness credentials service. Browser local storage stores selected workspace IDs and UI state only; it does not store authentication tokens.
 
 ## Settings Page
 
 The Hub settings page has two sections:
 
-- **Remote connections** manages multiple Hub endpoints, connection tests, enablement, removal, status, and the remote workspaces selected for the home page.
+- **Remote connections** manages multiple Hub connections, connection tests, enablement, removal, status, and the remote workspaces selected for the home page.
 - **This device as Hub** manages the local Hub listener, including enabled state, bind address, port, server name, credentials, lifecycle controls, and the address that other clients can copy.
 
 The small computer icon belongs to the remote connection entry in the settings page. It identifies a configured remote endpoint in that settings section. The home page project list does not use this icon as a project marker.
 
-Selecting a remote workspace in settings publishes a filter containing `(endpointId, workspaceId)`. The home page projects are derived only from that filter and the owning remote Host response. Unselected remote workspaces do not appear in the home page or in an ungrouped section.
+Selecting a remote workspace in settings publishes a filter containing `(endpointId, workspaceId)`. The home page stores and projects this compound reference, not a bare workspace ID. The home page projects are derived only from that filter and the owning remote Host response. Unselected remote workspaces do not appear in the home page or in an ungrouped section.
+
+Remote paths and working directories describe the owning Host and are never treated as local paths. Remote file, process, model, session, and workspace operations execute on the owning Host through its API. The local client does not pass a remote path to a local shell or filesystem provider.
 
 The discovery flow is:
 
