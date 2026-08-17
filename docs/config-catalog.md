@@ -821,7 +821,7 @@ export interface HubClientConfig {
 }
 ```
 
-Source: [`packages/hub/client/src/index.ts:20`](../packages/hub/client/src/index.ts)
+Source: [`packages/hub/client/src/index.ts:22`](../packages/hub/client/src/index.ts)
 
 <a id="deepseek-aidsh-hub-server"></a>
 
@@ -851,7 +851,7 @@ export interface HubServerConfig {
 }
 ```
 
-Source: [`packages/hub/server/src/server.ts:49`](../packages/hub/server/src/server.ts)
+Source: [`packages/hub/server/src/server.ts:50`](../packages/hub/server/src/server.ts)
 
 <a id="deepseek-aidsh-invariants"></a>
 

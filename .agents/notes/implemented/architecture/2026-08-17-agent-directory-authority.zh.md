@@ -24,5 +24,4 @@ Endpoint Agent 可以转发实时 Host 帧，但 Broker 中的目录仍可能是
 
 ## Consequences
 
-Endpoint 集成必须向 provider 提供完整 Host API，相关生命周期事件会触发两次 unary 读取。串行处理保证较旧快照不会在较新快照之后发布。Broker 仍是路由器和目录缓存，不会变成第二个工作区或会话权威来源。
-Agent 不会在后台自动尝试重连；连接关闭后的恢复时机由调用方负责，可以显式再次调用 `connect()`。
+Endpoint 集成必须向 provider 提供完整 Host API，相关生命周期事件会触发两次 unary 读取。串行处理保证较旧快照不会在较新快照之后发布。Broker 仍是路由器和目录缓存，不会变成第二个工作区或会话权威来源。Agent 不会在后台自动尝试重连；连接关闭后的恢复时机由调用方负责，可以显式再次调用 `connect()`。

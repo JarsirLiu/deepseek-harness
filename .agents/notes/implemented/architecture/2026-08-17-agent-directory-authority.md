@@ -24,5 +24,4 @@ This implements the directory-authority portion of the [replaceable Hub and Endp
 
 ## Consequences
 
-The Endpoint integration must expose the complete Host API to the provider, and directory refreshes perform two unary reads per relevant lifecycle event. Serial processing prevents an older snapshot from being published after a newer one. The Broker remains a router and directory cache; it does not become a second workspace or session authority.
-The Agent does not perform background reconnect attempts; callers own recovery timing and may explicitly call `connect()` after a connection has closed.
+The Endpoint integration must expose the complete Host API to the provider, and directory refreshes perform two unary reads per relevant lifecycle event. Serial processing prevents an older snapshot from being published after a newer one. The Broker remains a router and directory cache; it does not become a second workspace or session authority. The Agent does not perform background reconnect attempts; callers own recovery timing and may explicitly call `connect()` after a connection has closed.
