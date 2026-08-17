@@ -4,6 +4,7 @@
 - id: hub-server
   disabled: false
   config:
+    endpointId: remote:remote-local-test
     host: '127.0.0.1'
     port: 8765
     authTokens: ['dsh-local-test-token']
