@@ -8,6 +8,12 @@
 
 export { JsonRpcWebSocketTransport, JsonRpcResponseError } from './transport.ts'
 export type { JsonRpcTransportPeer } from './transport.ts'
+export {
+  hostFrameWorkspaceIds,
+  isEndpointWideHostFrame,
+  isHostFrameVisibleToWorkspaces,
+} from './host-workspace-ownership.ts'
+export type { HubWorkspaceOwnershipEntry } from './host-workspace-ownership.ts'
 export type {
   HubAppendParams,
   HubAppendResult,

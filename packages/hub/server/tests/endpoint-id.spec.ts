@@ -64,8 +64,14 @@ describe('Hub endpoint identity', () => {
       workspaceId: 'workspace-b',
       frame: { type: 'host/session-status', sessionId: 's2', running: true },
     })
-    expect(clientNotify).toHaveBeenCalledTimes(1)
+    handle.handleAgentHostEvent(agent, {
+      endpointId: 'remote:agent',
+      workspaceId: null,
+      frame: { type: 'host/remote-event', event: 'settings/document-updated', args: [] },
+    })
+    expect(clientNotify).toHaveBeenCalledTimes(2)
     expect(clientNotify).toHaveBeenCalledWith('hub/host', expect.objectContaining({ endpointId: 'remote:agent', workspaceId: 'workspace-a' }))
+    expect(clientNotify).toHaveBeenCalledWith('hub/host', expect.objectContaining({ endpointId: 'remote:agent', workspaceId: null }))
     expect(agentNotify).not.toHaveBeenCalled()
   })
 

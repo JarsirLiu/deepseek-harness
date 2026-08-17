@@ -266,7 +266,7 @@ export interface HubAgentHostEventParams {
   /** Endpoint that owns the event source. */
   endpointId: `remote:${string}`
   /** Workspace that owns the frame. */
-  workspaceId: string
+  workspaceId: string | null
   /** Unchanged Host API frame. */
   frame: HostFrame
 }

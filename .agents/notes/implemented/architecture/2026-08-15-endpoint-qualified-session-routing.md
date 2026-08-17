@@ -14,6 +14,8 @@ Remote session ownership is represented by `SessionRef` and indexed with `Sessio
 
 The endpoint id and workspace id are routing metadata owned by the selected remote workspace reference. Session operations must resolve that metadata before selecting a transport; they must not infer ownership from the session id alone or from a path.
 
+Endpoint Agents consume the owning Host `api.events.host` stream after registration. Shared ownership logic maps frames to published workspaces, forwards unchanged frames through `hub/agent/host-event`, and aborts and awaits the stream on disconnect. Endpoint-wide frames carry a null workspace id; a project frame without a unique owner stops the bridge rather than selecting an arbitrary workspace.
+
 ## Alternatives considered
 
 **Bare session ids with a UI-owned remote set:** Rejected because the set is transient and cannot distinguish equal ids from different hosts.

@@ -48,13 +48,23 @@ const workspace = {
   sessions: [],
 }
 
-function createAgent(apiProxy: Record<string, Record<string, (request: unknown) => Promise<unknown>>> = {}) {
+function createAgent(
+  apiProxy: Record<string, Record<string, (request: unknown) => Promise<unknown>>> = {},
+  host: (signal: AbortSignal) => AsyncIterable<{ payload: unknown }> = async function* (_signal) {
+    await new Promise<void>((resolve) => { _signal.addEventListener('abort', () => { resolve() }, { once: true }) })
+  },
+) {
   return new HubEndpointAgent({
     uri: 'ws://hub.test/hub',
     endpointId: 'remote:agent',
     token: 'secret',
     serverInfo: { name: 'agent', version: '1' },
-    apiProxy,
+    apiProxy: {
+      ...apiProxy,
+      events: {
+        host: (_request: unknown, signal: AbortSignal) => host(signal),
+      },
+    } as never,
   })
 }
 
@@ -69,7 +79,7 @@ describe('HubEndpointAgent', () => {
     expect(messages[0]?.method).toBe('hub/agent/register')
     expect(messages[0]?.params.workspaces).toEqual([workspace])
 
-    agent.disconnect()
+    await agent.disconnect()
     expect(agent.registrationResult).toBeNull()
     expect(() => { agent.publishHostEvent('workspace-a', { type: 'host/session-status', sessionId: 's1', running: true } as never) })
       .toThrow('not connected')
@@ -116,6 +126,28 @@ describe('HubEndpointAgent', () => {
       workspaceId: 'workspace-b',
       frame: { type: 'host/session-status', sessionId: 's1', running: true },
     })
+  })
+
+  it('bridges local Host frames and aborts the stream on disconnect', async () => {
+    let aborted = false
+    const agent = createAgent({}, async function* (signal) {
+      yield { payload: { type: 'host/session-added', sessionId: 'session-a', blank: true, cwd: 'D:/workspace-a' } }
+      yield { payload: { type: 'host/session-status', sessionId: 'session-a', running: true } }
+      await new Promise<void>((resolve) => { signal.addEventListener('abort', () => { aborted = true; resolve() }, { once: true }) })
+    })
+
+    await agent.connect([workspace])
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const socket = FakeWebSocket.instances.at(-1)!
+    const hostMessages = socket.sent
+      .map(message => JSON.parse(message) as { method: string; params?: Record<string, unknown> })
+      .filter(message => message.method === 'hub/agent/host-event')
+    expect(hostMessages).toHaveLength(2)
+    expect(hostMessages[0]?.params).toMatchObject({ workspaceId: 'workspace-a' })
+    expect(hostMessages[1]?.params).toMatchObject({ workspaceId: 'workspace-a', frame: { type: 'host/session-status' } })
+
+    await agent.disconnect()
+    expect(aborted).toBe(true)
   })
 
   it('routes allowed API requests and rejects identity, workspace, and method violations', async () => {

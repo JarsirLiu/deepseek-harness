@@ -43,6 +43,7 @@
     "ws": "^8.21.0"
   },
   "peerDependencies": {
+    "@deepseek-ai/dsh-host-apiproxy": "workspace:^",
     "@deepseek-ai/dsh-llm": "workspace:^",
     "@deepseek-ai/dsh-hub-protocol": "workspace:^",
     "@deepseek-ai/dsh-invariants": "workspace:^",
@@ -51,6 +52,7 @@
     "@deepseek-ai/cordis": "workspace:^"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-host-apiproxy": "workspace:^",
     "@deepseek-ai/dsh-llm": "workspace:^",
     "@types/ws": "^8.5.0",
     "@deepseek-ai/dsh-hub-protocol": "workspace:^",

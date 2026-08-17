@@ -16,6 +16,11 @@ const agent = new HubEndpointAgent({
   token: 'agent-secret',
   serverInfo: { name: 'registered-agent', version: '0.1.0' },
   apiProxy: {
+    events: {
+      host: async function* (_request: unknown, signal: AbortSignal) {
+        await new Promise<void>((resolve) => { signal.addEventListener('abort', () => { resolve() }, { once: true }) })
+      },
+    },
     sessions: {
       history: async (request: unknown) => ({ ok: true, value: { request, source: endpointId } }),
     },
@@ -39,7 +44,6 @@ await agent.connect(workspaces)
 console.log(JSON.stringify({ type: 'ready', endpointId: agent.registrationResult?.endpointId ?? null }))
 
 process.on('SIGTERM', () => {
-  agent.disconnect()
-  process.exit(0)
+  void agent.disconnect().then(() => { process.exit(0) })
 })
 process.stdin.resume()

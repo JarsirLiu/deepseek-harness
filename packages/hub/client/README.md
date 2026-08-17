@@ -10,6 +10,8 @@ The plugin profile row owns the remote WebSocket URI and authentication settings
 
 The package also exports `HubEndpointAgent` for a Host that registers itself with a Hub listener. The Agent requires an explicit endpoint identity, registration token, Host `apiProxy`, and complete workspace directory. It accepts only API requests addressed to its endpoint and a published workspace, then returns the original Host API result without projecting it into a Hub-specific model.
 
+After registration, the Agent consumes the same Host `api.events.host` stream used by local clients. It determines each frame's workspace from the published directory, forwards the unchanged frame through the Hub, and aborts and awaits the stream during disconnect. An endpoint-wide frame uses `workspaceId: null`; a project frame without a unique owner terminates the bridge instead of being broadcast ambiguously.
+
 ## Installation
 
 Install `@deepseek-ai/dsh-hub-client` through the Harness plugin manager or add its `cordis.patch.yml` row to a profile. The package declares its protocol, session, persistence, and invariant peers; a profile must provide those packages at compatible versions.

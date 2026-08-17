@@ -378,7 +378,7 @@ export class HubServer {
 
   private handleAgentHostEvent(client: ClientRecord, params: HubAgentHostEventParams): void {
     if (client.role !== 'agent' || client.endpointId !== params.endpointId) throw new Error('Endpoint Agent registration required')
-    if (!client.workspaces?.some(workspace => workspace.id === params.workspaceId)) {
+    if (params.workspaceId !== null && !client.workspaces?.some(workspace => workspace.id === params.workspaceId)) {
       throw new Error(`remote workspace unavailable: ${params.endpointId}/${params.workspaceId}`)
     }
     this.broadcastHostNotification({ endpointId: params.endpointId, workspaceId: params.workspaceId, frame: params.frame })

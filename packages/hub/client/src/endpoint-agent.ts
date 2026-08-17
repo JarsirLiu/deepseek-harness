@@ -4,12 +4,16 @@ import WebSocket from 'ws'
 import { randomUUID } from 'node:crypto'
 import {
   JsonRpcWebSocketTransport,
+  hostFrameWorkspaceIds,
+  isEndpointWideHostFrame,
+  type HubWorkspaceOwnershipEntry,
   type HubApiRequestParams,
   type HubAgentHostEventParams,
   type HubAgentRegisterResult,
   type HubEndpointSummary,
   type JsonRpcTransportPeer,
 } from '@deepseek-ai/dsh-hub-protocol'
+import type { ApiProxy, RpcId } from '@deepseek-ai/dsh-host-apiproxy/api'
 
 /** Configuration for an Endpoint Agent connection. */
 export interface HubEndpointAgentConfig {
@@ -22,7 +26,7 @@ export interface HubEndpointAgentConfig {
   /** Identity of the Host serving this endpoint. */
   serverInfo: { name: string; version: string }
   /** Host API implementation used for requests forwarded by the Hub. */
-  apiProxy: Record<string, Record<string, (request: unknown) => Promise<unknown>>>
+  apiProxy: Pick<ApiProxy, 'events'> & Record<string, Record<string, (request: unknown) => Promise<unknown>>>
 }
 
 /** Outbound connection used by a Host to register with a Hub listener. */
@@ -30,7 +34,10 @@ export class HubEndpointAgent {
   private ws: WebSocket | null = null
   private transport: JsonRpcTransportPeer | null = null
   private registration: HubAgentRegisterResult | null = null
-  private workspaces = new Set<string>()
+  private workspaces = new Map<string, HubWorkspaceOwnershipEntry>()
+  private hostAbortController: AbortController | null = null
+  private hostStreamDone: Promise<void> | null = null
+  private hostStreamError: unknown = null
 
   constructor(private readonly config: HubEndpointAgentConfig) {}
 
@@ -63,10 +70,11 @@ export class HubEndpointAgent {
       }) as HubAgentRegisterResult
       if (!isRegisterResult(result, this.config.endpointId)) throw new Error('invalid Endpoint Agent registration response')
       this.registration = result
-      this.workspaces = new Set(workspaces.map(workspace => workspace.id))
+      this.setWorkspaces(workspaces)
+      this.startHostBridge()
       return result
     } catch (error) {
-      this.disconnect()
+      await this.disconnect()
       throw error
     }
   }
@@ -80,17 +88,19 @@ export class HubEndpointAgent {
     await transport.request('hub/agent/publish-workspaces', {
       workspaces: workspaces.map(workspace => ({ ...workspace, endpointId: this.config.endpointId })),
     })
-    this.workspaces = new Set(workspaces.map(workspace => workspace.id))
+    this.setWorkspaces(workspaces)
   }
 
   /** Publish one unchanged Host API frame with explicit workspace ownership.
    * @param workspaceId - workspace that owns the frame.
    * @param frame - unchanged Host API frame.
    */
-  publishHostEvent(workspaceId: string, frame: HubAgentHostEventParams['frame']): void {
+  publishHostEvent(workspaceId: string | null, frame: HubAgentHostEventParams['frame']): void {
     const transport = this.transport
     if (transport === null) throw new Error('Endpoint Agent is not connected')
-    if (!this.workspaces.has(workspaceId)) throw new Error(`Endpoint Agent workspace unavailable: ${workspaceId}`)
+    if (workspaceId !== null && !this.workspaces.has(workspaceId)) {
+      throw new Error(`Endpoint Agent workspace unavailable: ${workspaceId}`)
+    }
     const event: HubAgentHostEventParams = {
       endpointId: this.config.endpointId,
       workspaceId,
@@ -100,16 +110,24 @@ export class HubEndpointAgent {
   }
 
   /** Disconnect this Endpoint Agent from the Hub. */
-  disconnect(): void {
+  async disconnect(): Promise<void> {
+    this.hostAbortController?.abort()
+    await this.hostStreamDone
     this.ws?.close()
     this.transport = null
     this.ws = null
     this.registration = null
     this.workspaces.clear()
+    this.hostAbortController = null
+    this.hostStreamDone = null
+    this.hostStreamError = null
   }
 
   /** Registration response from the current connection. */
   get registrationResult(): HubAgentRegisterResult | null { return this.registration }
+
+  /** Failure that ended the local Host event bridge, or null while it is healthy. */
+  get hostStreamFailure(): unknown { return this.hostStreamError }
 
   private async handleApiRequest(params: HubApiRequestParams): Promise<unknown> {
     if (params.endpointId !== this.config.endpointId) throw new Error(`Endpoint Agent identity mismatch: ${params.endpointId}`)
@@ -129,6 +147,67 @@ export class HubEndpointAgent {
     if (handler === undefined) throw new Error(`unsupported Endpoint Agent API method: ${params.method}`)
     return await handler({ rpcId: `hub-agent-api-${randomUUID()}`, payload: params.payload })
   }
+
+  private setWorkspaces(workspaces: HubEndpointSummary['workspaces']): void {
+    this.workspaces = new Map(workspaces.map(workspace => [workspace.id, {
+      id: workspace.id,
+      path: workspace.path,
+      sessionIds: workspace.sessions.map(session => session.sessionId),
+    }]))
+  }
+
+  private startHostBridge(): void {
+    const controller = new AbortController()
+    this.hostAbortController = controller
+    this.hostStreamDone = (async () => {
+      try {
+        for await (const envelope of this.config.apiProxy.events.host({ rpcId: `hub-agent-host-${randomUUID()}` as RpcId, payload: {} }, controller.signal)) {
+          const owners = hostFrameWorkspaceIds(envelope.payload, [...this.workspaces.values()])
+          if (isSessionHostFrame(envelope.payload) && owners.length !== 1) {
+            throw new Error(`Endpoint Agent cannot uniquely determine Host frame workspace: ${envelope.payload.type}`)
+          }
+          if (owners.length === 0 && !isEndpointWideHostFrame(envelope.payload)) {
+            throw new Error(`Endpoint Agent cannot determine Host frame workspace: ${envelope.payload.type}`)
+          }
+          if (owners.length === 0) this.publishHostEvent(null, envelope.payload)
+          else for (const workspaceId of owners) this.publishHostEvent(workspaceId, envelope.payload)
+          this.updateWorkspaceOwnership(envelope.payload, owners)
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) this.hostStreamError = error
+      }
+    })()
+  }
+
+  private updateWorkspaceOwnership(frame: import('@deepseek-ai/dsh-host-apiproxy/api').HostFrame, owners: readonly string[]): void {
+    if (frame.type === 'host/session-added') {
+      for (const workspaceId of owners) {
+        const workspace = this.workspaces.get(workspaceId)
+        if (workspace !== undefined && !workspace.sessionIds.includes(frame.sessionId)) {
+          workspace.sessionIds = [...workspace.sessionIds, frame.sessionId]
+        }
+      }
+    } else if (frame.type === 'host/session-removed') {
+      for (const workspace of this.workspaces.values()) {
+        workspace.sessionIds = workspace.sessionIds.filter(sessionId => sessionId !== frame.sessionId)
+      }
+    } else if (frame.type === 'host/workspace-changed') {
+      const workspace = this.workspaces.get(frame.workspace.workspaceId)
+      if (workspace !== undefined) {
+        workspace.path = frame.workspace.path
+        workspace.sessionIds = [...frame.workspace.sessionIds]
+      }
+    } else if (frame.type === 'host/workspace-removed') {
+      this.workspaces.delete(frame.workspaceId)
+    }
+  }
+}
+
+function isSessionHostFrame(frame: import('@deepseek-ai/dsh-host-apiproxy/api').HostFrame): boolean {
+  return frame.type === 'host/session-added'
+    || frame.type === 'host/session-removed'
+    || frame.type === 'host/session-status'
+    || frame.type === 'host/agent-error'
 }
 
 function parseApiRequestParams(params: Record<string, unknown>): HubApiRequestParams {
