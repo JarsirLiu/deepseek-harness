@@ -17,6 +17,9 @@ import {
   type HubHandshakeParams,
   type HubHandshakeResult,
   type HubCapabilities,
+  type HubAgentRegisterParams,
+  type HubEndpointSummary,
+  type HubWorkspaceEntry,
   type HubEventNotification,
   type HubHostNotification,
   type HubStatusNotification,
@@ -30,6 +33,10 @@ interface ClientRecord {
   subscribedAll: boolean
   subscribedWorkspaces: Set<string>
   authenticated: boolean
+  role: 'client' | 'agent'
+  endpointId?: `remote:${string}`
+  serverInfo?: { name: string; version: string }
+  workspaces?: HubWorkspaceEntry[]
   hostAbortController?: AbortController
 }
 
@@ -45,6 +52,8 @@ export interface HubServerConfig {
   host?: string
   /** Optional set of authentication tokens. */
   authTokens?: string[]
+  /** Endpoint-to-Hub credentials for Endpoint Agents. */
+  agentTokens?: Record<string, string>
   /** Server identity name. */
   serverName?: string
   /** Remote preset selected for each published workspace, keyed by workspace id. */
@@ -80,6 +89,7 @@ export class HubServer {
       port: config.port ?? DEFAULTS.port,
       host: config.host ?? DEFAULTS.host,
       authTokens: config.authTokens ?? [],
+      agentTokens: config.agentTokens ?? {},
       serverName: config.serverName ?? DEFAULTS.serverName,
       workspacePresets: config.workspacePresets ?? {},
     }
@@ -175,6 +185,7 @@ export class HubServer {
       subscribedAll: false,
       subscribedWorkspaces: new Set(),
       authenticated: this.config.authTokens.length === 0,
+      role: 'client',
     }
     this.clients.set(clientId, client)
 
@@ -196,14 +207,20 @@ export class HubServer {
     method: string,
     params: Record<string, unknown>,
   ): Promise<unknown> {
-    if (method !== 'hub/handshake' && !client.authenticated) {
+    if (method !== 'hub/handshake' && method !== 'hub/agent/register' && !client.authenticated) {
       throw new Error('handshake required')
     }
     switch (method) {
       case 'hub/handshake':
         return this.handleHandshake(client, params)
+      case 'hub/agent/register':
+        return this.handleAgentRegister(client, parseAgentRegisterParams(params))
+      case 'hub/agent/publish-workspaces':
+        return this.handleAgentPublishWorkspaces(client, parseWorkspacePublishParams(params))
       case 'hub/list':
         return this.handleList()
+      case 'hub/list-endpoints':
+        return this.handleListEndpoints(client)
       case 'hub/workspaces':
         return await this.handleWorkspaces(params)
       case 'hub/api/request':
@@ -242,6 +259,52 @@ export class HubServer {
       },
       capabilities,
     }
+  }
+
+  private handleAgentRegister(client: ClientRecord, params: HubAgentRegisterParams): { endpointId: `remote:${string}`; brokerInfo: { name: string; version: string } } {
+    if (client.role !== 'client' || client.endpointId !== undefined) throw new Error('connection already registered')
+    requireEndpointId(params.endpointId)
+    const expected = this.config.agentTokens[params.endpointId]
+    if (expected === undefined || params.token !== expected) throw new Error('endpoint authentication failed')
+    for (const existing of this.clients.values()) {
+      if (existing !== client && existing.role === 'agent' && existing.endpointId === params.endpointId) {
+        throw new Error(`endpoint already connected: ${params.endpointId}`)
+      }
+    }
+    client.authenticated = true
+    client.role = 'agent'
+    client.endpointId = params.endpointId
+    client.serverInfo = params.serverInfo
+    client.workspaces = params.workspaces
+    return {
+      endpointId: params.endpointId,
+      brokerInfo: { name: this.config.serverName, version: DEFAULTS.version },
+    }
+  }
+
+  private handleAgentPublishWorkspaces(client: ClientRecord, params: { workspaces: HubWorkspaceEntry[] }): Record<string, never> {
+    if (client.role !== 'agent' || client.endpointId === undefined) throw new Error('Endpoint Agent registration required')
+    client.workspaces = params.workspaces
+    return {}
+  }
+
+  private handleListEndpoints(client: ClientRecord): { endpoints: HubEndpointSummary[] } {
+    if (client.role !== 'client' || !client.authenticated) throw new Error('authenticated Client required')
+    const endpoints: HubEndpointSummary[] = [{
+      endpointId: this.config.endpointId,
+      serverInfo: { name: this.config.serverName, version: DEFAULTS.version },
+      workspaces: [],
+    }]
+    for (const client of this.clients.values()) {
+      if (client.role !== 'agent' || client.endpointId === undefined || client.workspaces === undefined) continue
+      if (client.serverInfo === undefined) throw new Error(`registered Agent is missing server info: ${client.endpointId}`)
+      endpoints.push({
+        endpointId: client.endpointId,
+        serverInfo: client.serverInfo,
+        workspaces: client.workspaces,
+      })
+    }
+    return { endpoints }
   }
 
   /** Forward the official api.events.host stream without changing its frames. */
@@ -447,4 +510,60 @@ export class HubServer {
 function requireEndpointId(endpointId: `remote:${string}`): `remote:${string}` {
   if (!/^remote:[^\s]+$/u.test(endpointId)) throw new Error(`invalid Hub endpoint identity: ${endpointId}`)
   return endpointId
+}
+
+function parseAgentRegisterParams(params: Record<string, unknown>): HubAgentRegisterParams {
+  if (typeof params.endpointId !== 'string' || !/^remote:[^\s]+$/u.test(params.endpointId)
+    || typeof params.token !== 'string' || params.token === ''
+    || !isServerInfo(params.serverInfo)
+    || (params.version !== undefined && typeof params.version !== 'string')) {
+    throw new Error('invalid Endpoint Agent registration')
+  }
+  return {
+    endpointId: params.endpointId as `remote:${string}`,
+    token: params.token,
+    ...(params.version === undefined ? {} : { version: params.version }),
+    serverInfo: params.serverInfo,
+    workspaces: parseWorkspaces(params.workspaces),
+  }
+}
+
+function parseWorkspacePublishParams(params: Record<string, unknown>): { workspaces: HubWorkspaceEntry[] } {
+  return { workspaces: parseWorkspaces(params.workspaces) }
+}
+
+function parseWorkspaces(value: unknown): HubWorkspaceEntry[] {
+  if (!Array.isArray(value)) throw new Error('invalid Endpoint Agent workspace directory')
+  return value.map((workspace) => {
+    if (!isRecord(workspace)
+      || typeof workspace.id !== 'string'
+      || typeof workspace.title !== 'string'
+      || typeof workspace.path !== 'string'
+      || !Array.isArray(workspace.sessions)) {
+      throw new Error('invalid Endpoint Agent workspace directory')
+    }
+    const sessions = workspace.sessions.map((session) => {
+      if (!isRecord(session)
+        || typeof session.endpointId !== 'string'
+        || !/^remote:[^\s]+$/u.test(session.endpointId)
+        || typeof session.sessionId !== 'string'
+        || typeof session.updatedAt !== 'number'
+        || !Number.isFinite(session.updatedAt)
+        || typeof session.running !== 'boolean'
+        || typeof session.blank !== 'boolean') {
+        throw new Error('invalid Endpoint Agent workspace directory')
+      }
+      return session as unknown as HubWorkspaceEntry['sessions'][number]
+    })
+    return { ...workspace, sessions } as HubWorkspaceEntry
+  })
+}
+
+function isServerInfo(value: unknown): value is { name: string; version: string } {
+  return isRecord(value) && typeof value.name === 'string' && value.name !== ''
+    && typeof value.version === 'string' && value.version !== ''
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

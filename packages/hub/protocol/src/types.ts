@@ -83,6 +83,41 @@ export interface HubWorkspaceListResult {
   workspaces: HubWorkspaceEntry[]
 }
 
+/** One endpoint currently visible through a Hub listener. */
+export interface HubEndpointSummary {
+  /** Stable identity of the endpoint that owns the published resources. */
+  endpointId: `remote:${string}`
+  /** Identity of the Host serving this endpoint. */
+  serverInfo: { name: string; version: string }
+  /** Workspace summaries published by the endpoint. */
+  workspaces: HubWorkspaceEntry[]
+}
+
+/** Result of listing endpoints visible through a Hub listener. */
+export interface HubEndpointListResult {
+  endpoints: HubEndpointSummary[]
+}
+
+/** Parameters for registering an Endpoint Agent with a Hub listener. */
+export interface HubAgentRegisterParams {
+  /** Stable identity owned by the registering endpoint. */
+  endpointId: `remote:${string}`
+  /** Endpoint-to-Hub credential. */
+  token: string
+  /** Agent version string. */
+  version?: string
+  /** Identity of the Host serving this endpoint. */
+  serverInfo: { name: string; version: string }
+  /** Initial workspace directory published by the endpoint. */
+  workspaces: HubWorkspaceEntry[]
+}
+
+/** Result of registering an Endpoint Agent. */
+export interface HubAgentRegisterResult {
+  endpointId: `remote:${string}`
+  brokerInfo: { name: string; version: string }
+}
+
 /** Parameters for creating a session in a remote workspace. */
 export interface HubWorkspaceSessionCreateParams {
   workspaceId: string
@@ -255,7 +290,10 @@ export interface HubNotificationMap {
 /** Client-to-server request methods with their param and result shapes. */
 export interface HubRequestMap {
   'hub/handshake': { params: HubHandshakeParams; result: HubHandshakeResult }
+  'hub/agent/register': { params: HubAgentRegisterParams; result: HubAgentRegisterResult }
+  'hub/agent/publish-workspaces': { params: { workspaces: HubWorkspaceEntry[] }; result: HubAppendResult }
   'hub/list': { params: HubListParams; result: HubListResult }
+  'hub/list-endpoints': { params: Record<string, never>; result: HubEndpointListResult }
   'hub/workspaces': { params: { workspaceIds?: string[] }; result: HubWorkspaceListResult }
   'hub/subscribe': { params: HubSubscribeParams; result: HubAppendResult }
   'hub/unsubscribe': { params: HubSubscribeParams; result: HubAppendResult }

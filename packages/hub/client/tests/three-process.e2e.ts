@@ -14,6 +14,7 @@ interface RunningProcess {
 const tsconfigPath = fileURLToPath(new URL('../../../../tsconfig.json', import.meta.url))
 const serverFixture = fileURLToPath(new URL('./fixtures/hub-server.ts', import.meta.url))
 const clientFixture = fileURLToPath(new URL('./fixtures/hub-client.ts', import.meta.url))
+const agentFixture = fileURLToPath(new URL('./fixtures/hub-agent.ts', import.meta.url))
 const children: ChildProcess[] = []
 
 afterEach(async () => {
@@ -34,6 +35,31 @@ describe('Hub endpoint identity across isolated processes', () => {
       endpointId: 'remote:process-owned',
       serverInfo: { name: 'deepseek-harness-hub', version: '0.1.0' },
     })
+  }, 15_000)
+
+  it('registers an Endpoint Agent and exposes its workspace through discovery', async () => {
+    const port = await freePort()
+    const server = startProcess(serverFixture, [String(port), 'remote:broker-owned'])
+    children.push(server.child)
+    await expect(server.ready).resolves.toMatchObject({ type: 'ready', endpointId: 'remote:broker-owned' })
+
+    const agent = startProcess(agentFixture, [String(port)])
+    children.push(agent.child)
+    await expect(agent.ready).resolves.toMatchObject({ type: 'ready', endpointId: 'remote:registered-agent' })
+
+    const client = startProcess(clientFixture, [`ws://127.0.0.1:${port}/hub`])
+    children.push(client.child)
+    const clientReady = await client.ready
+    expect(clientReady.type).toBe('ready')
+    const endpointList = clientReady.endpoints as {
+      endpoints: Array<{ endpointId: string; workspaces: Array<{ id: string }> }>
+    }
+    expect(endpointList.endpoints.some(endpoint => endpoint.endpointId === 'remote:registered-agent'
+      && endpoint.workspaces.some(workspace => workspace.id === 'workspace-agent'))).toBe(true)
+
+    const duplicateAgent = startProcess(agentFixture, [String(port)])
+    children.push(duplicateAgent.child)
+    await expect(duplicateAgent.ready).rejects.toThrow('endpoint already connected: remote:registered-agent')
   }, 15_000)
 })
 

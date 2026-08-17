@@ -821,7 +821,7 @@ export interface HubClientConfig {
 }
 ```
 
-Source: [`packages/hub/client/src/index.ts:19`](../packages/hub/client/src/index.ts)
+Source: [`packages/hub/client/src/index.ts:20`](../packages/hub/client/src/index.ts)
 
 <a id="deepseek-aidsh-hub-server"></a>
 
@@ -842,6 +842,8 @@ export interface HubServerConfig {
   host?: string
   /** Optional set of authentication tokens. */
   authTokens?: string[]
+  /** Endpoint-to-Hub credentials for Endpoint Agents. */
+  agentTokens?: Record<string, string>
   /** Server identity name. */
   serverName?: string
   /** Remote preset selected for each published workspace, keyed by workspace id. */
@@ -849,7 +851,7 @@ export interface HubServerConfig {
 }
 ```
 
-Source: [`packages/hub/server/src/server.ts:39`](../packages/hub/server/src/server.ts)
+Source: [`packages/hub/server/src/server.ts:46`](../packages/hub/server/src/server.ts)
 
 <a id="deepseek-aidsh-invariants"></a>
 

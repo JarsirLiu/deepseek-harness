@@ -6,7 +6,7 @@ Shared protocol library for the remote Hub capability. It defines the WebSocket 
 
 ## Usage
 
-Install this package as a dependency of a Hub runtime role. It has no Cordis plugin row, no profile patch, and no process entrypoint. The exported types describe the status response used by the browser settings section and the session operations used by the server and client.
+Install this package as a dependency of a Hub runtime role. It has no Cordis plugin row, no profile patch, and no process entrypoint. The exported types describe the status response used by the browser settings section, Endpoint Agent registration and workspace discovery, and the session operations used by the server and client.
 
 ## Model Experience
 

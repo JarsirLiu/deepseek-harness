@@ -844,6 +844,8 @@ export interface HubServerConfig {
   host?: string
   /** Optional set of authentication tokens. */
   authTokens?: string[]
+  /** Endpoint-to-Hub credentials for Endpoint Agents. */
+  agentTokens?: Record<string, string>
   /** Server identity name. */
   serverName?: string
   /** Remote preset selected for each published workspace, keyed by workspace id. */

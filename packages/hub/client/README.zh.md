@@ -8,6 +8,8 @@
 
 插件 profile row 持有远程 WebSocket URI 与认证设置。客户端不能配置远程端点身份；成功的 Hub 握手是身份的唯一来源。握手完成前，`/api/hub/status` 返回 `endpointId: null`，也不会注册远程传输。插件注册远程 session provider，并提供可选 UI 包使用的 `/api/hub/status` Web 端点；插件 fiber 释放时连接一并释放。
 
+本包还导出 `HubEndpointAgent`，供 Host 向 Hub listener 注册自身。Agent 必须使用显式端点身份和注册 token，发布完整工作区目录，不生成身份或重连凭据。目录发现与会话 API 转发彼此独立。
+
 ## 安装
 
 通过 Harness plugin manager 安装 `@deepseek-ai/dsh-hub-client`，或将其 `cordis.patch.yml` row 加入 profile。本包声明 protocol、session、persistence 和 invariant peer；profile 必须提供兼容版本的这些包。
@@ -32,3 +34,4 @@
 
 - **UI 为可选项**：只安装 client provider 仍可提供远程会话，但不会出现设置区。
 - **Web 路由由部署负责** —— `RemoteAgentClient` 提供远程执行接口；Host API 必须为配置为远程执行的会话选择它。
+- **Endpoint Agent 发布必须显式提供**：Host 集成必须向 `HubEndpointAgent` 提供工作区摘要；本包不会推导或合成目录。

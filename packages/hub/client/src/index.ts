@@ -8,8 +8,9 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import { RemoteSessionProvider } from './remote-session-provider.ts'
-
 export { RemoteSessionProvider, HubConnectionError } from './remote-session-provider.ts'
+export { HubEndpointAgent } from './endpoint-agent.ts'
+export type { HubEndpointAgentConfig } from './endpoint-agent.ts'
 export type { RemoteHubConfig } from './remote-session-provider.ts'
 
 export const name = 'hub-client'

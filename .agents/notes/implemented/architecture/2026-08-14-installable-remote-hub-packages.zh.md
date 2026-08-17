@@ -13,8 +13,8 @@ Status: implemented
 Hub 能力发布为三个可安装运行时包和一个可选 UI 包：
 
 - `@deepseek-ai/dsh-hub-protocol` 作为库发布共享传输与响应类型，不提供 Cordis row。
-- `@deepseek-ai/dsh-hub-server` 发布 Cordis 插件和 bundle patch，通过 WebSocket JSON-RPC 暴露本地会话和 Agent 执行。
-- `@deepseek-ai/dsh-hub-client` 发布 Cordis 插件和 bundle patch，连接 Hub server，提供远程会话 provider、Agent 命令和事件通知给 Host API。
+- `@deepseek-ai/dsh-hub-server` 发布 Cordis 插件和 bundle patch，通过 WebSocket JSON-RPC 暴露本地会话，接受经过认证的 Endpoint Agent 注册，并发布已注册工作区目录供 Client 发现。
+- `@deepseek-ai/dsh-hub-client` 发布 Cordis 插件和 bundle patch，连接 Hub server，提供远程会话 provider、Agent 命令和事件通知给 Host API，并导出显式的 `HubEndpointAgent` 注册客户端。
 - `@deepseek-ai/dsh-client-ui-hub` 发布浏览器设置区。它通过 `settings.section` 注册，依赖注入的 slot/runtime/locale 服务，并将缺少 `/api/hub/status` 端点表示为明确的 unavailable 状态。它不持有 Hub 传输或持久化。
 
 每个包都在 `package.json` 中声明发布入口、发布文件、peer 依赖和仓库目录。Web bundle 声明 UI 包依赖与 `dsh.client` row；server 与 client 包分别声明自己的 bundle patch。这样包安装与 profile 组合都保持显式。
@@ -31,4 +31,4 @@ Hub 能力发布为三个可安装运行时包和一个可选 UI 包：
 
 ## Verification
 
-UI 组件测试覆盖 loading、全部连接状态、端点不可用、错误详情和重试行为。TypeScript project references 校验 protocol、server、client 和 Host API 入口及声明的依赖图。Hub client 校验端点身份只能来自握手，真实双进程 WebSocket 测试使用隔离进程验证 Server/Client 的身份交换。
+UI 组件测试覆盖 loading、全部连接状态、端点不可用、错误详情和重试行为。TypeScript project references 校验 protocol、server、client 和 Host API 入口及声明的依赖图。Hub client 校验端点身份只能来自握手，Server 校验显式 Agent 凭据与重复注册，真实三进程 WebSocket 测试使用隔离进程验证 Broker、Endpoint Agent 注册和 Client 目录发现。已注册 Agent 的 API 转发属于独立能力。

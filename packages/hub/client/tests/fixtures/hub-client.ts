@@ -8,10 +8,12 @@ if (uri === undefined) throw new Error('Hub Client fixture requires a WebSocket 
 const provider = new RemoteSessionProvider({} as never, { uri })
 try {
   await provider.connect()
+  const endpoints = await provider.request('hub/list-endpoints', {})
   console.log(JSON.stringify({
     type: 'ready',
     endpointId: provider.connectedServerInfo?.endpointId ?? null,
     serverInfo: provider.connectedServerInfo?.serverInfo ?? null,
+    endpoints,
   }))
 } catch (error) {
   console.log(JSON.stringify({ type: 'error', message: error instanceof Error ? error.message : String(error) }))

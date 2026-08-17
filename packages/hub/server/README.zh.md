@@ -6,7 +6,7 @@
 
 ## 配置
 
-插件 profile row 必须提供稳定的 `endpointId`，并接受 `port`、`host`、`authTokens` 和 `serverName`。`endpointId` 由拥有所发布会话的 Host 持有，在握手时返回；它不会从客户端配置或 `serverName` 推导。插件持有监听服务器，并随插件 fiber 一起释放。默认只监听回环地址；只有配置认证并保护传输时才应指定非回环地址。
+插件 profile row 必须提供稳定的 `endpointId`，并接受 `port`、`host`、`authTokens`、`agentTokens` 和 `serverName`。`endpointId` 由拥有所发布会话的 Host 持有，在握手时返回；它不会从客户端配置或 `serverName` 推导。`agentTokens` 将稳定的 Endpoint Agent 身份映射到显式注册凭据。已注册 Agent 通过同一个 listener 发布工作区摘要，经过认证的 Client 使用 `hub/list-endpoints` 发现这些端点。插件持有监听服务器，并随插件 fiber 一起释放。默认只监听回环地址；只有配置认证并保护传输时才应指定非回环地址。
 
 ## 安装
 
@@ -31,4 +31,5 @@
 ## 已知限制与后续工作
 
 - **监听器是部署端点**：绑定地址、防火墙、TLS 和 token 分发必须由部署配置。
+- **暂不转发 Agent API**：本阶段只注册 Agent 并发布工作区摘要；已注册端点的会话与 Host API 转发属于独立能力。
 - **不提供会话删除**：在 persistence seam 提供真正的删除操作前，协议将删除声明为不支持。

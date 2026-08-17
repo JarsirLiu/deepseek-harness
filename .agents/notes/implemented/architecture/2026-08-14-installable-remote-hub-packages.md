@@ -13,8 +13,8 @@ Remote Hub support spans a wire protocol, a server-side provider, a client-side 
 The Hub capability is published as three installable runtime packages and one optional UI package:
 
 - `@deepseek-ai/dsh-hub-protocol` publishes shared transport and response types as a library and has no Cordis row.
-- `@deepseek-ai/dsh-hub-server` publishes a Cordis plugin and bundle patch that exposes local sessions and Agent execution over WebSocket JSON-RPC.
-- `@deepseek-ai/dsh-hub-client` publishes a Cordis plugin and bundle patch that connects to a Hub server, exposes the remote session provider, and supplies remote Agent commands and event notifications to the Host API.
+- `@deepseek-ai/dsh-hub-server` publishes a Cordis plugin and bundle patch that exposes local sessions over WebSocket JSON-RPC, accepts authenticated Endpoint Agent registrations, and publishes the registered workspace directory for Client discovery.
+- `@deepseek-ai/dsh-hub-client` publishes a Cordis plugin and bundle patch that connects to a Hub server, exposes the remote session provider, supplies remote Agent commands and event notifications to the Host API, and exports an explicit `HubEndpointAgent` registration client.
 - `@deepseek-ai/dsh-client-ui-hub` publishes the browser settings section. It registers through `settings.section`, depends on injected slot/runtime/locale services, and treats a missing `/api/hub/status` endpoint as an explicit unavailable result. It does not own Hub transport or persistence.
 
 Each package declares its published entrypoints, bundled files, peer dependencies, and repository directory in `package.json`. The web bundle declares the UI package dependency and `dsh.client` row, while the server and client packages declare their own bundle patches. This keeps package installation and profile composition explicit.
@@ -31,4 +31,4 @@ Consumers can install protocol, server, client, and UI roles independently, with
 
 ## Verification
 
-The UI component suite covers loading, all connection states, unavailable endpoint, error detail, and retry behavior. TypeScript project references validate the protocol, server, client, and Host API entrypoints and declared dependency graph. The Hub client validates that endpoint identity comes from the handshake, and a real two-process WebSocket test verifies the Server/Client identity exchange with isolated processes.
+The UI component suite covers loading, all connection states, unavailable endpoint, error detail, and retry behavior. TypeScript project references validate the protocol, server, client, and Host API entrypoints and declared dependency graph. The Hub client validates that endpoint identity comes from the handshake, the Server validates explicit Agent credentials and duplicate registration, and a real three-process WebSocket test verifies Broker, Endpoint Agent registration, and Client directory discovery with isolated processes. Registered Agent API forwarding remains separate from this registration capability.
