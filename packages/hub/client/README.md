@@ -12,7 +12,9 @@ The package also exports `HubEndpointAgent` for a Host that registers itself wit
 
 After registration, the Agent consumes the same Host `api.events.host` stream used by local clients. It determines each frame's workspace from the published directory, forwards the unchanged frame through the Hub, and aborts and awaits the stream during disconnect. An endpoint-wide frame uses `workspaceId: null`; a project frame without a unique owner terminates the bridge instead of being broadcast ambiguously. A directory snapshot failure closes the Agent connection so the Hub cannot continue advertising stale metadata.
 
-An unexpected Hub socket close aborts the Host stream and clears the registration and directory state. Calling `connect()` again is the explicit recovery operation: it waits for the old stream to finish, reads a new authoritative directory snapshot, and registers a new Hub connection. The Agent does not retry or reconnect in the background.
+The Agent also consumes the official `api.events.mux` stream and forwards each `session/event` envelope unchanged through `hub/event` with endpoint and workspace ownership. Other mux frame types are ignored. A session event whose session is absent from the authoritative directory closes the Agent connection instead of being attributed to an unknown workspace.
+
+An unexpected Hub socket close aborts the Host stream and clears the registration and directory state. When `autoReconnect` is enabled, the Agent waits for the configured `reconnectDelay`, reads a new authoritative directory snapshot, registers a new Hub connection, and starts one replacement `api.events.host` stream. A failed recovery attempt is retried after the same delay. Calling `disconnect()` disables recovery, cancels the pending timer, and waits for the Host stream to stop.
 
 ## Installation
 

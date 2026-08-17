@@ -10,6 +10,7 @@ import { createServer } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import type { RpcId } from '@deepseek-ai/dsh-host-apiproxy/api'
 import { hostFrameWorkspaceIds, isHostFrameVisibleToWorkspaces, type WorkspaceSubscriptionEntry } from './workspace-subscription.ts'
 export { hostFrameWorkspaceIds, isHostFrameVisibleToWorkspaces } from './workspace-subscription.ts'
 import {
@@ -27,6 +28,17 @@ import {
   type HubStatusNotification,
   type HubWorkspaceRef,
 } from '@deepseek-ai/dsh-hub-protocol'
+import {
+  parseAgentEventNotification,
+  parseAgentHostEventParams,
+  parseAgentRegisterParams,
+  parseApiRequestParams,
+  parseWorkspacePublishParams,
+  parseWorkspaceSubscriptionParams,
+  requireEndpointId,
+} from './wire-params.ts'
+import { projectWorkspaces, type WorkspaceProjectionApi, type LocalWorkspaceDirectory } from './workspace-projection.ts'
+import { forwardApiRequest, type ApiProxyMethod } from './api-forwarding.ts'
 
 /** A connected client session record. */
 interface ClientRecord {
@@ -207,7 +219,13 @@ export class HubServer {
       return this.handleRequest(client, method, params)
     })
     transport.onNotification((method, params) => {
-      if (method === 'hub/agent/host-event') this.handleAgentHostEvent(client, parseAgentHostEventParams(params))
+      try {
+        if (method === 'hub/agent/host-event') this.handleAgentHostEvent(client, parseAgentHostEventParams(params))
+        if (method === 'hub/agent/event') this.handleAgentEvent(client, parseAgentEventNotification(params))
+      } catch (error) {
+        this.ctx.logger.warn(`hub server rejected Agent notification: ${error instanceof Error ? error.message : String(error)}`)
+        client.socket.close()
+      }
     })
 
     transport.start()
@@ -384,6 +402,21 @@ export class HubServer {
     this.broadcastHostNotification({ endpointId: params.endpointId, workspaceId: params.workspaceId, frame: params.frame })
   }
 
+  private handleAgentEvent(client: ClientRecord, notification: HubEventNotification): void {
+    if (client.role !== 'agent' || client.endpointId !== notification.endpointId) throw new Error('Endpoint Agent registration required')
+    const workspace = client.workspaces?.find(workspace => workspace.id === notification.workspaceId)
+    if (workspace === undefined || !workspace.sessions.some(session => session.sessionId === notification.sessionId)) {
+      throw new Error(`remote session unavailable: ${notification.endpointId}/${notification.workspaceId}/${notification.sessionId}`)
+    }
+    for (const target of this.clients.values()) {
+      const selected = target.subscribedWorkspaces.get(notification.endpointId)
+      if (selected?.has(notification.workspaceId) || target.subscribedAll
+        || target.subscribedSessions.has(sessionSubscriptionKey(notification.workspaceId, notification.sessionId))) {
+        try { target.transport.notify('hub/event', notification) } catch { /* disconnected client */ }
+      }
+    }
+  }
+
   private localSubscribedWorkspaces(client: ClientRecord): ReadonlySet<string> {
     return client.subscribedWorkspaces.get(this.config.endpointId) ?? new Set()
   }
@@ -419,131 +452,47 @@ export class HubServer {
 
   /** List directories registered by the remote device's workspace service. */
   private async handleWorkspaces(params: { workspaces?: HubWorkspaceRef[] } = {}): Promise<import('@deepseek-ai/dsh-hub-protocol').HubWorkspaceListResult> {
-    const registry = this.ctx.get('workspaceRegistry') as {
-      list: () => Array<{ id: string; title: string; path: string; sessionIds: SessionId[] }>
-      archivedSessionIds: readonly SessionId[]
-    } | undefined
-    const api = this.ctx.get('apiProxy') as {
-      sessions?: {
-        list: (request: {
-          rpcId: string
-          payload: Record<string, never>
-        }) => Promise<{
-          result: { ok: true
-            value: { items: Array<{
-              sessionId: SessionId
-              updatedAt: number
-              running: boolean
-              blank: boolean
-              cwd?: string
-              agentPreset?: string
-              parentSessionId?: SessionId
-              origin?: 'subagent'
-              projections?: { values?: { title?: string | null } }
-            }> } } | { ok: false; error: unknown }
-        }>
-        history: (request: { rpcId: string; payload: { sessionId: SessionId; maxMessages: number } }) => Promise<{
-          result: { ok: true; value: { projections?: { values?: { title?: string | null } } } } | { ok: false; error: unknown }
-        }>
-      }
-    } | undefined
-    const summaries = api === undefined || api.sessions === undefined
-      ? []
-      : await api.sessions.list({ rpcId: `hub-workspaces-${Date.now()}`, payload: {} }).then((response) => {
-        if (!response.result.ok) throw new Error(`remote session listing failed: ${JSON.stringify(response.result.error)}`)
-        return response.result.value.items
-      })
-    const byId = new Map(await Promise.all(summaries.map(async (summary) => {
-      if (typeof summary.projections?.values?.title === 'string' && summary.projections.values.title !== '') {
-        return [String(summary.sessionId), summary] as const
-      }
-      const history = api === undefined || api.sessions === undefined
-        ? undefined
-        : await api.sessions.history({
-          rpcId: `hub-workspace-history-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          payload: { sessionId: summary.sessionId, maxMessages: 1 },
-        })
-      if (history?.result.ok !== true) return [String(summary.sessionId), summary] as const
-      const title = history.result.value.projections?.values?.title
-      return [String(summary.sessionId), typeof title === 'string' && title !== ''
-        ? { ...summary, projections: { ...summary.projections, values: { ...summary.projections?.values, title } } }
-        : summary] as const
-    })))
-    const archived = registry === undefined ? new Set<SessionId>() : new Set(registry.archivedSessionIds)
-    const selected = params.workspaces === undefined ? undefined : new Set(
-      params.workspaces.map(workspace => `${workspace.endpointId}\u0000${workspace.workspaceId}`),
-    )
-    const localWorkspaces = registry === undefined
-      ? []
-      : registry.list().map(workspace => ({
-        endpointId: this.config.endpointId,
-        id: workspace.id,
-        title: workspace.title,
-        path: workspace.path,
-        sessions: workspace.sessionIds,
-      }))
+    const registry = this.ctx.get('workspaceRegistry') as LocalWorkspaceDirectory | undefined
+    const api = this.ctx.get('apiProxy') as { sessions?: WorkspaceProjectionApi['sessions'] } | undefined
     const agentWorkspaces = [...this.clients.values()].flatMap(client =>
       client.role === 'agent' ? client.workspaces ?? [] : [])
-    return {
+    return await projectWorkspaces({
       endpointId: this.config.endpointId,
-      workspaces: [...localWorkspaces, ...agentWorkspaces]
-        .filter(workspace => selected === undefined || selected.has(`${workspace.endpointId}\u0000${workspace.id}`))
-        .map(workspace => ({
-          ...workspace,
-          sessions: workspace.sessions.flatMap((sessionOrId) => {
-            const sessionId = typeof sessionOrId === 'string' ? sessionOrId : sessionOrId.sessionId
-            if (archived.has(sessionId)) return []
-            const summary = typeof sessionOrId === 'string' ? byId.get(String(sessionId)) : sessionOrId
-            if (summary === undefined) return []
-            const title = 'projections' in summary
-              ? summary.projections.values?.title
-              : 'title' in summary ? summary.title : undefined
-            return [{
-              sessionId: summary.sessionId,
-              endpointId: workspace.endpointId,
-              updatedAt: summary.updatedAt,
-              running: summary.running,
-              blank: summary.blank,
-              ...(summary.cwd === undefined ? {} : { cwd: summary.cwd }),
-              ...(typeof title === 'string' && title !== '' ? { title } : {}),
-              ...(summary.agentPreset === undefined ? {} : { agentPreset: summary.agentPreset }),
-              ...(summary.parentSessionId === undefined ? {} : { parentSessionId: summary.parentSessionId }),
-              ...(summary.origin === undefined ? {} : { origin: summary.origin }),
-            }]
-          }),
-        })),
-    }
+      registry,
+      api: api?.sessions === undefined ? undefined : { sessions: api.sessions },
+      agentWorkspaces,
+      selected: params.workspaces,
+      createRpcId: () => `hub-workspaces-${randomUUID()}`,
+    })
   }
 
   /** Forward a typed Host API request without changing its result payload. */
   private async handleApiRequest(params: HubApiRequestParams): Promise<unknown> {
+    const agents = [...this.clients.values()]
+      .filter(client => client.role === 'agent')
+      .map(client => ({
+        endpointId: client.endpointId,
+        workspaces: client.workspaces,
+        request: (method: string, request: HubApiRequestParams) => client.transport.request(method, request),
+      }))
     if (params.endpointId !== this.config.endpointId) {
-      const agent = [...this.clients.values()].find(client => client.role === 'agent' && client.endpointId === params.endpointId)
-      if (agent === undefined) throw new Error(`remote endpoint unavailable: ${params.endpointId}`)
-      if (!agent.workspaces?.some(workspace => workspace.id === params.workspaceId)) {
-        throw new Error(`remote workspace unavailable: ${params.endpointId}/${params.workspaceId}`)
-      }
-      return await agent.transport.request('hub/api/request', params)
+      return await forwardApiRequest(params, {
+        endpointId: this.config.endpointId,
+        localWorkspaceIds: [],
+        agents,
+        createRpcId: () => `hub-api-${randomUUID()}` as RpcId,
+      })
     }
     const registry = this.ctx.get('workspaceRegistry') as { list: () => Array<{ id: string }> } | undefined
     if (registry === undefined) throw new Error('local workspace registry is unavailable')
-    if (!registry.list().some(workspace => workspace.id === params.workspaceId)) {
-      throw new Error(`local workspace unavailable: ${params.workspaceId}`)
-    }
-    const allowed = new Set([
-      'session.list', 'session.create', 'session.history', 'session.models', 'session.selectModel',
-      'session.rename', 'session.fork', 'session.prompt', 'session.attachment', 'session.updateQueue',
-      'session.cancel', 'subagent.list', 'subagent.history', 'subagent.prompt', 'subagent.interrupt',
-      'workspace.rename', 'workspace.delete', 'workspace.insertBefore', 'workspace.insertSessionBefore',
-      'workspace.archiveSession',
-    ])
-    if (!allowed.has(params.method)) throw new Error(`unsupported remote API method: ${params.method}`)
-    const [domain, operation] = params.method.split('.')
-    const apiDomain = domain === 'session' ? 'sessions' : domain === 'subagent' ? 'subagents' : domain === 'agentPreset' ? 'agentPresets' : domain
-    const api = this.ctx.get('apiProxy') as Record<string, Record<string, (request: unknown) => Promise<unknown>>> | undefined
-    const handler = apiDomain === undefined || operation === undefined ? undefined : api?.[apiDomain]?.[operation]
-    if (handler === undefined) throw new Error(`remote API method is unavailable: ${params.method}`)
-    return await handler({ rpcId: `hub-api-${randomUUID()}`, payload: params.payload })
+    const api = this.ctx.get('apiProxy') as Record<string, Record<string, ApiProxyMethod>> | undefined
+    return await forwardApiRequest(params, {
+      endpointId: this.config.endpointId,
+      localWorkspaceIds: registry?.list().map(workspace => workspace.id) ?? [],
+      localApi: api,
+      agents,
+      createRpcId: () => `hub-api-${randomUUID()}` as RpcId,
+    })
   }
 
   private handleSubscribe(
@@ -597,112 +546,4 @@ export class HubServer {
 
 function sessionSubscriptionKey(workspaceId: string, sessionId: SessionId): string {
   return `${workspaceId}\u0000${String(sessionId)}`
-}
-
-function parseApiRequestParams(params: Record<string, unknown>): HubApiRequestParams {
-  if (typeof params.endpointId !== 'string' || !/^remote:[^\s]+$/u.test(params.endpointId)
-    || typeof params.workspaceId !== 'string' || params.workspaceId === ''
-    || typeof params.method !== 'string' || params.method === ''
-    || !isRecord(params.payload)) {
-    throw new Error('invalid Hub API request')
-  }
-  return {
-    endpointId: params.endpointId as `remote:${string}`,
-    workspaceId: params.workspaceId,
-    method: params.method,
-    payload: params.payload,
-  }
-}
-
-function requireEndpointId(endpointId: `remote:${string}`): `remote:${string}` {
-  if (!/^remote:[^\s]+$/u.test(endpointId)) throw new Error(`invalid Hub endpoint identity: ${endpointId}`)
-  return endpointId
-}
-
-function parseAgentRegisterParams(params: Record<string, unknown>): HubAgentRegisterParams {
-  if (typeof params.endpointId !== 'string' || !/^remote:[^\s]+$/u.test(params.endpointId)
-    || typeof params.token !== 'string' || params.token === ''
-    || !isServerInfo(params.serverInfo)
-    || (params.version !== undefined && typeof params.version !== 'string')) {
-    throw new Error('invalid Endpoint Agent registration')
-  }
-  return {
-    endpointId: params.endpointId as `remote:${string}`,
-    token: params.token,
-    ...(params.version === undefined ? {} : { version: params.version }),
-    serverInfo: params.serverInfo,
-    workspaces: parseWorkspaces(params.workspaces),
-  }
-}
-
-function parseWorkspacePublishParams(params: Record<string, unknown>): { workspaces: HubWorkspaceEntry[] } {
-  return { workspaces: parseWorkspaces(params.workspaces) }
-}
-
-function parseWorkspaceSubscriptionParams(params: Record<string, unknown>): { workspaces?: HubWorkspaceRef[] } {
-  if (params.workspaces === undefined) return {}
-  if (!Array.isArray(params.workspaces)) throw new Error('invalid Hub workspace subscription')
-  return {
-    workspaces: params.workspaces.map((workspace) => {
-      if (!isRecord(workspace)
-        || typeof workspace.endpointId !== 'string'
-        || !/^remote:[^\s]+$/u.test(workspace.endpointId)
-        || typeof workspace.workspaceId !== 'string'
-        || workspace.workspaceId === '') {
-        throw new Error('invalid Hub workspace subscription')
-      }
-      return workspace as unknown as HubWorkspaceRef
-    }),
-  }
-}
-
-function parseAgentHostEventParams(params: Record<string, unknown>): HubAgentHostEventParams {
-  if (typeof params.endpointId !== 'string' || !/^remote:[^\s]+$/u.test(params.endpointId)
-    || (params.workspaceId !== null && (typeof params.workspaceId !== 'string' || params.workspaceId === ''))
-    || !isRecord(params.frame) || typeof params.frame.type !== 'string') {
-    throw new Error('invalid Endpoint Agent Host event')
-  }
-  return {
-    endpointId: params.endpointId as `remote:${string}`,
-    workspaceId: params.workspaceId as string | null,
-    frame: params.frame as HubAgentHostEventParams['frame'],
-  }
-}
-
-function parseWorkspaces(value: unknown): HubWorkspaceEntry[] {
-  if (!Array.isArray(value)) throw new Error('invalid Endpoint Agent workspace directory')
-  return value.map((workspace) => {
-    if (!isRecord(workspace)
-      || typeof workspace.endpointId !== 'string'
-      || !/^remote:[^\s]+$/u.test(workspace.endpointId)
-      || typeof workspace.id !== 'string'
-      || typeof workspace.title !== 'string'
-      || typeof workspace.path !== 'string'
-      || !Array.isArray(workspace.sessions)) {
-      throw new Error('invalid Endpoint Agent workspace directory')
-    }
-    const sessions = workspace.sessions.map((session) => {
-      if (!isRecord(session)
-        || typeof session.endpointId !== 'string'
-        || !/^remote:[^\s]+$/u.test(session.endpointId)
-        || typeof session.sessionId !== 'string'
-        || typeof session.updatedAt !== 'number'
-        || !Number.isFinite(session.updatedAt)
-        || typeof session.running !== 'boolean'
-        || typeof session.blank !== 'boolean') {
-        throw new Error('invalid Endpoint Agent workspace directory')
-      }
-      return session as unknown as HubWorkspaceEntry['sessions'][number]
-    })
-    return { ...workspace, sessions } as HubWorkspaceEntry
-  })
-}
-
-function isServerInfo(value: unknown): value is { name: string; version: string } {
-  return isRecord(value) && typeof value.name === 'string' && value.name !== ''
-    && typeof value.version === 'string' && value.version !== ''
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

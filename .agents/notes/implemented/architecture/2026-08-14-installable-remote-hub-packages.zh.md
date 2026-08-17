@@ -10,7 +10,7 @@ Status: implemented
 
 ## Decision
 
-Hub 能力发布为三个可安装运行时包和一个可选 UI 包：
+Hub 能力发布为三个可安装运行时包和一个可选 UI 包。Endpoint Agent 在 Hub 异常断开后通过一次延迟的新连接恢复；显式断开会关闭恢复并等待 Host 事件流停止。Agent 消费官方的 `api.events.host` 和 `api.events.mux` 流，只转发受支持的帧，不重建会话业务状态：
 
 - `@deepseek-ai/dsh-hub-protocol` 作为库发布共享传输与响应类型，不提供 Cordis row。
 - `@deepseek-ai/dsh-hub-server` 发布 Cordis 插件和 bundle patch，通过 WebSocket JSON-RPC 暴露本地会话，接受经过认证的 Endpoint Agent 注册，发布已注册工作区目录供 Client 发现，并将端点限定的 API 请求转发给已注册 Agent。
@@ -27,8 +27,8 @@ Hub 能力发布为三个可安装运行时包和一个可选 UI 包：
 
 ## Consequences
 
-消费者可以独立安装 protocol、server、client 和 UI 角色，profile manifest 表达有效的组合边。Host API 使用已安装的 hub client 作为远程 prompt 与事件载体；Host 端点缺失时 UI 包保持显式且无操作。跨包兼容性由共享 workspace 版本范围和 protocol 响应类型约束；独立发布意味着 wire contract 变化时仍需一起发布兼容版本。
+消费者可以独立安装 protocol、server、client 和 UI 角色，profile manifest 表达有效的组合边。Host API 使用已安装的 hub client 作为远程 prompt 与事件载体；Host 端点缺失时 UI 包保持显式且无操作。跨包兼容性由共享 workspace 版本范围和 protocol 响应类型约束；独立发布意味着 wire contract 变化时仍需一起发布兼容版本。恢复会重新获取完整目录快照并重新建立 `api.events.host` 和 `api.events.mux` 流，Broker 不会把旧的本地元数据继续当作权威数据。只有权威目录能够识别会话归属时，mux 帧才会被转发。
 
 ## Verification
 
-UI 组件测试覆盖 loading、全部连接状态、端点不可用、错误详情和重试行为。TypeScript project references 校验 protocol、server、client 和 Host API 入口及声明的依赖图。Hub client 校验端点身份只能来自握手，Server 校验显式 Agent 凭据与重复注册，真实三进程 WebSocket 测试使用隔离进程验证 Broker 将请求路由到两个具有相同工作区和 session 标识的 Agent、拒绝未知端点以及拒绝 Agent 断线后的请求。
+UI 组件测试覆盖 loading、全部连接状态、端点不可用、错误详情和重试行为。TypeScript project references 校验 protocol、server、client 和 Host API 入口及声明的依赖图。Hub client 校验握手端点身份、API 响应 envelope 原样保留、Host 和 mux 事件转发、未知会话拒绝、Agent 自动恢复、恢复失败重试、显式断开取消恢复以及关闭自动恢复。Server 校验显式 Agent 凭据、重复注册、格式错误 Agent 通知和按工作区隔离事件。真实三进程 WebSocket 测试使用隔离进程验证 Broker 将 API、Host 流和 mux 流路由到两个具有相同工作区和 session 标识的 Agent、拒绝未知端点以及拒绝 Agent 断线后的请求。

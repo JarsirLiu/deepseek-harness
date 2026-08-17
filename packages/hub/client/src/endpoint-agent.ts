@@ -29,6 +29,10 @@ export interface HubEndpointAgentConfig {
   apiProxy: ApiProxy
   /** Authoritative local Host directory used for registration and refreshes. */
   directory: HubWorkspaceDirectory
+  /** Reconnect after an unexpected Hub disconnect. */
+  autoReconnect?: boolean
+  /** Delay before an automatic reconnect attempt, in milliseconds. */
+  reconnectDelay?: number
 }
 
 /** Outbound connection used by a Host to register with a Hub listener. */
@@ -40,6 +44,12 @@ export class HubEndpointAgent {
   private hostAbortController: AbortController | null = null
   private hostStreamDone: Promise<void> | null = null
   private hostStreamError: unknown = null
+  private muxAbortController: AbortController | null = null
+  private muxStreamDone: Promise<void> | null = null
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private reconnecting = false
+  private reconnectEnabled = false
+  private hasConnected = false
 
   constructor(private readonly config: HubEndpointAgentConfig) {}
 
@@ -48,6 +58,8 @@ export class HubEndpointAgent {
    */
   async connect(): Promise<HubAgentRegisterResult> {
     if (this.ws !== null || this.transport !== null) throw new Error('Endpoint Agent is already connected')
+    this.reconnectEnabled = this.config.autoReconnect ?? true
+    this.clearReconnectTimer()
     await this.hostStreamDone
     if (this.ws !== null || this.transport !== null) throw new Error('Endpoint Agent is already connected')
     const ws = new WebSocket(this.config.uri)
@@ -77,9 +89,12 @@ export class HubEndpointAgent {
       this.registration = result
       this.setWorkspaces(workspaces)
       this.startHostBridge()
+      this.startMuxBridge()
+      this.hasConnected = true
       return result
     } catch (error) {
-      await this.disconnect()
+      await this.clearConnection()
+      if (this.hasConnected) this.scheduleReconnect()
       throw error
     }
   }
@@ -117,9 +132,17 @@ export class HubEndpointAgent {
 
   /** Disconnect this Endpoint Agent from the Hub. */
   async disconnect(): Promise<void> {
+    this.reconnectEnabled = false
+    this.clearReconnectTimer()
+    await this.clearConnection()
+  }
+
+  private async clearConnection(): Promise<void> {
     const ws = this.ws
     this.hostAbortController?.abort()
+    this.muxAbortController?.abort()
     await this.hostStreamDone
+    await this.muxStreamDone
     this.transport?.close()
     this.transport = null
     this.ws = null
@@ -128,6 +151,8 @@ export class HubEndpointAgent {
     this.hostAbortController = null
     this.hostStreamDone = null
     this.hostStreamError = null
+    this.muxAbortController = null
+    this.muxStreamDone = null
     ws?.close()
   }
 
@@ -148,12 +173,12 @@ export class HubEndpointAgent {
       'workspace.archiveSession',
     ])
     if (!allowed.has(params.method)) throw new Error(`unsupported Endpoint Agent API method: ${params.method}`)
-    const [domain, operation] = params.method.split('.')
-    const handler = domain === undefined || operation === undefined
-      ? undefined
-      : (this.config.apiProxy as unknown as Record<string, Record<string, (request: unknown) => Promise<unknown>>>)[domain === 'session' ? 'sessions' : domain === 'subagent' ? 'subagents' : domain]?.[operation]
+    const [domain, operation] = params.method.split('.') as [string, string]
+    const handler = (this.config.apiProxy as unknown as Record<string, Record<string, ApiProxyMethod>>)[domain === 'session' ? 'sessions' : domain === 'subagent' ? 'subagents' : domain]?.[operation]
     if (handler === undefined) throw new Error(`unsupported Endpoint Agent API method: ${params.method}`)
-    return await handler({ rpcId: `hub-agent-api-${randomUUID()}`, payload: params.payload })
+    // The Host API's rpcId correlates its local request/response pair. The Hub
+    // keeps the business RpcResult, whose fields are the public remote result.
+    return (await handler({ rpcId: `hub-agent-api-${randomUUID()}` as RpcId, payload: params.payload })).result
   }
 
   private setWorkspaces(workspaces: HubEndpointSummary['workspaces']): void {
@@ -193,6 +218,40 @@ export class HubEndpointAgent {
     })
   }
 
+  /** Forward durable session events from the official Host mux stream. */
+  private startMuxBridge(): void {
+    const controller = new AbortController()
+    this.muxAbortController = controller
+    const done = (async () => {
+      try {
+        for await (const envelope of this.config.apiProxy.events.mux({
+          rpcId: `hub-agent-mux-${randomUUID()}` as RpcId,
+          payload: {},
+        }, controller.signal)) {
+          const frame = envelope.payload
+          if (frame.type !== 'session/event') continue
+          const workspaceId = this.workspaceForSession(frame.sessionId)
+          if (workspaceId === undefined) throw new Error(`Endpoint Agent session workspace unavailable: ${frame.sessionId}`)
+          this.transport?.notify('hub/agent/event', {
+            endpointId: this.config.endpointId,
+            workspaceId,
+            sessionId: frame.sessionId,
+            event: frame.event,
+          })
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) this.failHostBridge(error)
+      }
+    })()
+    this.muxStreamDone = done
+    void done.finally(() => {
+      if (this.muxStreamDone === done) {
+        this.muxStreamDone = null
+        this.muxAbortController = null
+      }
+    })
+  }
+
   private async bridgeHostFrame(frame: import('@deepseek-ai/dsh-host-apiproxy/api').HostFrame): Promise<void> {
     if (frame.type === 'host/workspace-changed' && !this.workspaces.has(frame.workspace.workspaceId)) {
       await this.publishWorkspaces(await this.config.directory.snapshot())
@@ -204,10 +263,7 @@ export class HubEndpointAgent {
       throw new Error(`Endpoint Agent cannot uniquely determine Host frame workspace: ${frame.type}`)
     }
     if (owners.length === 0 && !isEndpointWideHostFrame(frame)) {
-      if (frame.type !== 'host/workspace-changed') throw new Error(`Endpoint Agent cannot determine Host frame workspace: ${frame.type}`)
-      await this.publishWorkspaces(await this.config.directory.snapshot())
-      this.publishHostFrame(frame)
-      return
+      throw new Error(`Endpoint Agent cannot determine Host frame workspace: ${frame.type}`)
     }
     this.publishHostFrame(frame, owners)
     if (directoryRefreshFrame(frame)) await this.publishWorkspaces(await this.config.directory.snapshot())
@@ -216,6 +272,10 @@ export class HubEndpointAgent {
   private publishHostFrame(frame: import('@deepseek-ai/dsh-host-apiproxy/api').HostFrame, owners?: readonly string[]): void {
     if (owners === undefined || owners.length === 0) this.publishHostEvent(null, frame)
     else for (const workspaceId of owners) this.publishHostEvent(workspaceId, frame)
+  }
+
+  private workspaceForSession(sessionId: import('@deepseek-ai/dsh-session').SessionId): string | undefined {
+    return [...this.workspaces.entries()].find(([, workspace]) => workspace.sessionIds.includes(sessionId))?.[0]
   }
 
   private failHostBridge(error: unknown): void {
@@ -229,13 +289,37 @@ export class HubEndpointAgent {
     if (ws === null || this.ws !== ws) return
     this.hostStreamError ??= new Error('Endpoint Agent Hub connection closed')
     this.hostAbortController?.abort()
+    this.muxAbortController?.abort()
     this.transport?.close()
     this.transport = null
     this.ws = null
     this.registration = null
     this.workspaces.clear()
+    if (this.reconnectEnabled && this.hasConnected) this.scheduleReconnect()
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer !== null || this.reconnecting || !this.reconnectEnabled) return
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      this.reconnecting = true
+      void this.connect()
+        .catch(() => undefined)
+        .finally(() => {
+          this.reconnecting = false
+          if (this.reconnectEnabled && this.hasConnected && this.ws === null) this.scheduleReconnect()
+        })
+    }, this.config.reconnectDelay ?? 3000)
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer === null) return
+    clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = null
   }
 }
+
+type ApiProxyMethod = (request: { rpcId: RpcId; payload: Record<string, unknown> }) => Promise<{ result: unknown }>
 
 function directoryRefreshFrame(frame: import('@deepseek-ai/dsh-host-apiproxy/api').HostFrame): boolean {
   return frame.type === 'host/session-added'

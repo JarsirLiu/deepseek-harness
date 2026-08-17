@@ -12,7 +12,9 @@
 
 注册完成后，Agent 消费与本地客户端相同的 Host `api.events.host` 流。它根据已发布的目录确定每帧所属工作区，通过 Hub 转发未修改的帧，并在断连时 abort 且等待流结束。端点级帧使用 `workspaceId: null`；无法唯一确定项目归属的项目帧会终止桥接，而不会产生歧义广播。目录快照失败会关闭 Agent 连接，Hub 不会继续公布旧目录元数据。
 
-Hub socket 意外关闭时，Agent 会中止 Host 流并清除注册和目录状态。调用方再次调用 `connect()` 即执行显式恢复：Agent 等待旧流结束，重新读取权威目录快照，并注册新的 Hub 连接。Agent 不会在后台自动重试或重连。
+Agent 还消费官方的 `api.events.mux` 流，并将每个 `session/event` envelope 原样通过 `hub/event` 转发，同时附带端点和工作区归属。其他 mux 帧类型会被忽略。如果会话事件中的会话不在权威目录中，Agent 会关闭连接，而不会把事件归入未知工作区。
+
+Hub socket 意外关闭时，Agent 会中止 Host 流并清除注册和目录状态。启用 `autoReconnect` 后，Agent 等待配置的 `reconnectDelay`，重新读取权威目录快照，注册新的 Hub 连接，并重新建立一条 `api.events.host` 流；恢复失败会按相同延迟再次尝试。调用 `disconnect()` 会关闭恢复、取消等待中的定时器，并等待 Host 流停止。
 
 ## 安装
 

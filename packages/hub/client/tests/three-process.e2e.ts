@@ -158,6 +158,114 @@ describe('Hub endpoint identity across isolated processes', () => {
       workspaces: { workspaces: [expect.objectContaining({ id: 'workspace-new', endpointId: 'remote:registered-agent' })] },
     })
   }, 15_000)
+
+  it('forwards remote Host API results unchanged for history and workspace session operations', async () => {
+    const port = await freePort()
+    const server = startProcess(serverFixture, [String(port), 'remote:broker-owned'])
+    children.push(server.child)
+    await server.ready
+
+    const agent = startProcess(agentFixture, [String(port), 'remote:business-agent'])
+    children.push(agent.child)
+    await agent.ready
+
+    const client = startProcess(clientFixture, [
+      `ws://127.0.0.1:${port}/hub`, 'remote:business-agent', 'workspace-agent', '', 'business',
+    ])
+    children.push(client.child)
+    await expect(client.ready).resolves.toMatchObject({
+      request: {
+        ok: true,
+        value: {
+          operation: 'session.history',
+          payload: { sessionId: 'shared-session' },
+          source: 'remote:business-agent',
+        },
+      },
+      business: [
+        { ok: true, value: { operation: 'session.create', payload: { workspaceId: 'workspace-agent', sessionId: 'created-session' }, source: 'remote:business-agent' } },
+        { ok: true, value: { operation: 'session.prompt', payload: { sessionId: 'shared-session', mode: 'queue', content: [{ type: 'text', text: 'hello remote' }] }, source: 'remote:business-agent' } },
+        { ok: true, value: { operation: 'session.fork', payload: { sessionId: 'shared-session', atSeq: 3 }, source: 'remote:business-agent' } },
+        { ok: true, value: { operation: 'workspace.archiveSession', payload: { sessionId: 'shared-session' }, source: 'remote:business-agent' } },
+      ],
+    })
+  }, 15_000)
+
+  it('forwards the unchanged Host event to independent clients subscribed to the selected workspace', async () => {
+    const port = await freePort()
+    const server = startProcess(serverFixture, [String(port), 'remote:broker-owned'])
+    children.push(server.child)
+    await server.ready
+
+    const agent = startProcess(agentFixture, [String(port), 'remote:event-agent', 'workspace-agent', '', 'emit-host-event'])
+    children.push(agent.child)
+    await agent.ready
+
+    const clientArgs = [
+      `ws://127.0.0.1:${port}/hub`, 'remote:event-agent', 'workspace-agent', 'subscribe-host',
+    ]
+    const firstClient = startProcess(clientFixture, clientArgs)
+    const secondClient = startProcess(clientFixture, clientArgs)
+    children.push(firstClient.child, secondClient.child)
+
+    for (const client of [firstClient, secondClient]) {
+      await expect(client.ready).resolves.toMatchObject({
+        hostFrames: [expect.objectContaining({
+          endpointId: 'remote:event-agent',
+          workspaceId: 'workspace-agent',
+          frame: { type: 'host/session-status', sessionId: 'shared-session', running: true },
+        })],
+      })
+    }
+  }, 15_000)
+
+  it('forwards assistant stream events from the official remote mux stream', async () => {
+    const port = await freePort()
+    const server = startProcess(serverFixture, [String(port), 'remote:broker-owned'])
+    children.push(server.child)
+    await server.ready
+
+    const agent = startProcess(agentFixture, [String(port), 'remote:event-agent', 'workspace-agent', '', 'emit-mux-event'])
+    children.push(agent.child)
+    await agent.ready
+
+    const client = startProcess(clientFixture, [
+      `ws://127.0.0.1:${port}/hub`, 'remote:event-agent', 'workspace-agent', 'subscribe-events',
+    ])
+    children.push(client.child)
+    await expect(client.ready).resolves.toMatchObject({
+      eventFrames: [expect.objectContaining({
+        endpointId: 'remote:event-agent',
+        workspaceId: 'workspace-agent',
+        sessionId: 'shared-session',
+        event: { seq: 1, type: 'assistant/chunk', text: 'streamed remote reply' },
+      })],
+    })
+  }, 15_000)
+
+  it('re-registers the Endpoint Agent after the Hub is restarted', async () => {
+    const port = await freePort()
+    const server = startProcess(serverFixture, [String(port), 'remote:broker-owned'])
+    children.push(server.child)
+    await server.ready
+
+    const agent = startProcess(agentFixture, [String(port), 'remote:reconnect-agent'])
+    children.push(agent.child)
+    await agent.ready
+
+    await stopProcess(server.child)
+    const replacement = startProcess(serverFixture, [String(port), 'remote:broker-owned'])
+    children.push(replacement.child)
+    await replacement.ready
+
+    const client = startProcess(clientFixture, [
+      `ws://127.0.0.1:${port}/hub`, 'remote:reconnect-agent', 'workspace-agent',
+    ])
+    children.push(client.child)
+    await expect(client.ready).resolves.toMatchObject({
+      request: { ok: true, value: { source: 'remote:reconnect-agent' } },
+    })
+  }, 15_000)
 })
 
 function startProcess(script: string, args: readonly string[]): RunningProcess {
