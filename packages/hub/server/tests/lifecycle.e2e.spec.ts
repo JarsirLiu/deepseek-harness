@@ -164,6 +164,55 @@ describe('HubServer WebSocket lifecycle', () => {
     client.close()
   })
 
+  it('keeps the client workspace projection empty until a workspace is selected', async () => {
+    const server = new HubServer({
+      logger: { info: vi.fn() },
+      on: vi.fn(() => vi.fn()),
+      get: (key: string) => key === 'apiProxy' ? { events: { host: emptyHostStream } } : undefined,
+    } as never, {
+      endpointId: 'remote:broker',
+      agentTokens: { 'remote:agent': 'agent-secret' },
+      port: 0,
+    })
+    server.start()
+    await server.waitUntilListening()
+    const { port } = (server as unknown as { httpServer: { address: () => AddressInfo } }).httpServer.address()
+    const connect = async (): Promise<JsonRpcWebSocketTransport> => {
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/hub`)
+      await new Promise<void>((resolve, reject) => {
+        socket.once('open', resolve)
+        socket.once('error', reject)
+      })
+      const transport = new JsonRpcWebSocketTransport(socket)
+      transport.start()
+      return transport
+    }
+    const agent = await connect()
+    await agent.request('hub/agent/register', {
+      endpointId: 'remote:agent',
+      token: 'agent-secret',
+      serverInfo: { name: 'agent', version: '1' },
+      workspaces: [{ endpointId: 'remote:agent', id: 'workspace-a', title: 'A', path: '/a', sessions: [] }],
+    })
+    const client = await connect()
+    await client.request('hub/handshake', {})
+
+    await expect(client.request('hub/workspaces', { workspaces: [] })).resolves.toEqual({
+      endpointId: 'remote:broker',
+      workspaces: [],
+    })
+    await expect(client.request('hub/workspaces', {
+      workspaces: [{ endpointId: 'remote:agent', workspaceId: 'workspace-a' }],
+    })).resolves.toEqual({
+      endpointId: 'remote:broker',
+      workspaces: [{ endpointId: 'remote:agent', id: 'workspace-a', title: 'A', path: '/a', sessions: [] }],
+    })
+
+    await server.stop()
+    agent.close()
+    client.close()
+  })
+
   it('forwards Agent notifications only to clients subscribed to that endpoint workspace', async () => {
     const server = new HubServer({
       logger: { info: vi.fn(), warn: vi.fn() },

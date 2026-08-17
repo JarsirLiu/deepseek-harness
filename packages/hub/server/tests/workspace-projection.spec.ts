@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
+import { SessionId } from '@deepseek-ai/dsh-session'
 import { projectWorkspaces } from '../src/workspace-projection.ts'
 
 const endpointId = 'remote:broker' as const
 const agentWorkspace = {
   endpointId: 'remote:agent' as const,
   id: 'workspace-a', title: 'Agent', path: '/agent',
-  sessions: [{ endpointId: 'remote:agent' as const, sessionId: 'shared', updatedAt: 2, running: true, blank: false, title: 'Agent title' }],
+  sessions: [{ endpointId: 'remote:agent' as const, sessionId: SessionId('shared'), updatedAt: 2, running: true, blank: false, title: 'Agent title' }],
 }
 
 function api(options: {
@@ -125,7 +126,7 @@ describe('Hub workspace projection', () => {
       ...agentWorkspace,
       sessions: [
         ...agentWorkspace.sessions,
-        { endpointId: 'remote:agent' as const, sessionId: 'archived', updatedAt: 3, running: false, blank: false, title: 'Archived' },
+        { endpointId: 'remote:agent' as const, sessionId: SessionId('archived'), updatedAt: 3, running: false, blank: false, title: 'Archived' },
       ],
     }
     await expect(projectWorkspaces({
