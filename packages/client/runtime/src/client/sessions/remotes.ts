@@ -65,12 +65,12 @@ export function localSessionTransport(api: IApiClient, sessionId: SessionId): Se
 /** Adapt one endpoint-owned Hub transport to the Runtime Session interface.
  * @param transport - the Hub transport for the owning endpoint.
  * @param ref - the endpoint-qualified session reference.
- * @param workspaceId - the explicit workspace that owns the session.
  * @returns the Runtime session transport.
  */
-export function remoteSessionTransport(transport: RemoteSessionTransport, ref: SessionRef, workspaceId: string): SessionTransport {
+export function remoteSessionTransport(transport: RemoteSessionTransport, ref: SessionRef): SessionTransport {
   if (!transport.owns(ref)) throw new Error(`remote transport does not own session ${String(ref.sessionId)}`)
   const id = ref.sessionId
+  const workspaceId = ref.workspaceId
   return {
     history: payload => asResponse(transport.history(workspaceId, id, payload)),
     prompt: (content, mode) => asResponse(transport.prompt(workspaceId, id, content, mode)),

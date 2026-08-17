@@ -24,6 +24,7 @@ const server = new HubServer(ctx as never, {
   agentTokens: {
     'remote:registered-agent': 'agent-secret',
     'remote:second-agent': 'agent-secret',
+    'remote:multi-agent': 'agent-secret',
   },
 })
 server.start()

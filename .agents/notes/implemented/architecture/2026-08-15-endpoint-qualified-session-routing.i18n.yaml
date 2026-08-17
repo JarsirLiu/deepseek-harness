@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-15-endpoint-qualified-session-routing.md
-2026-08-15-endpoint-qualified-session-routing.md: 74bfe3eb0079ef001b2fe88e44f54eafd77f7b43
-2026-08-15-endpoint-qualified-session-routing.zh.md: 81ecabb9d784f4f9c4046f4ca326e84fa97abc7f
+2026-08-15-endpoint-qualified-session-routing.md: 70f7dd15e78d66595fb0e6e8913bf2cd0da95e50
+2026-08-15-endpoint-qualified-session-routing.zh.md: 80bd0e56a9ea9c43c7eaea8e1fc167f474b3e9d4

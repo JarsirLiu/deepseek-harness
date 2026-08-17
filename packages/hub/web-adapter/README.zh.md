@@ -2,7 +2,7 @@
 
 # @deepseek-ai/dsh-hub-web-adapter
 
-Hub Web bundle 所有的浏览器传输层。它为每个远程会话保留所属端点身份，并向 Web UI 暴露远程会话操作。
+Hub Web bundle 所有的浏览器传输层。它为每个远程会话保留所属端点、已选工作区和会话身份，并向 Web UI 暴露远程会话操作。
 
 该包是项目自有 Web 客户端 bundle 使用的库，不替代 Harness server，也不要求上游 Harness 安装任何修改。本地会话不使用此 adapter。
 

@@ -139,6 +139,9 @@ export function apply(ctx: Context, config: HubClientConfig): void {
         const id = request.url === undefined
           ? undefined
           : new URL(request.url, 'http://localhost').searchParams.get('id')
+        const workspaceId = request.url === undefined
+          ? undefined
+          : new URL(request.url, 'http://localhost').searchParams.get('workspaceId')
         response.writeHead(200, {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
@@ -147,9 +150,11 @@ export function apply(ctx: Context, config: HubClientConfig): void {
         response.write(': connected\n\n')
         const unsubscribe = id === null || id === undefined
           ? provider.onEvent((notification) => { response.write(`data: ${JSON.stringify(notification)}\n\n`) })
-          : provider.subscribe(id as import('@deepseek-ai/dsh-session').SessionId, (notification) => {
-            response.write(`data: ${JSON.stringify(notification)}\n\n`)
-          })
+          : workspaceId === null || workspaceId === undefined
+            ? provider.onEvent((notification) => { response.write(`data: ${JSON.stringify(notification)}\n\n`) })
+            : provider.subscribe(workspaceId, id as import('@deepseek-ai/dsh-session').SessionId, (notification) => {
+              response.write(`data: ${JSON.stringify(notification)}\n\n`)
+            })
         response.on?.('close', () => {
           unsubscribe()
           response.end()

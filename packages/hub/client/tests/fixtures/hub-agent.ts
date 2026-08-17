@@ -7,7 +7,8 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 const port = process.argv[2]
 if (port === undefined) throw new Error('Hub Agent fixture requires a port')
 const endpointId = (process.argv[3] ?? 'remote:registered-agent') as `remote:${string}`
-const workspaceId = process.argv[4] ?? 'workspace-agent'
+const workspaceIds = (process.argv[4] ?? 'workspace-agent').split(',').filter(id => id !== '')
+if (workspaceIds.length === 0) throw new Error('Hub Agent fixture requires at least one workspace')
 
 const agent = new HubEndpointAgent({
   uri: `ws://127.0.0.1:${port}/hub`,
@@ -20,11 +21,11 @@ const agent = new HubEndpointAgent({
     },
   },
 })
-const workspaces: HubEndpointSummary['workspaces'] = [{
+const workspaces: HubEndpointSummary['workspaces'] = workspaceIds.map(workspaceId => ({
   endpointId,
   id: workspaceId,
-  title: `${endpointId} Workspace`,
-  path: 'D:/agent/project',
+  title: `${endpointId} ${workspaceId}`,
+  path: `D:/agent/${workspaceId}`,
   sessions: [{
     endpointId,
     sessionId: 'shared-session' as SessionId,
@@ -32,7 +33,7 @@ const workspaces: HubEndpointSummary['workspaces'] = [{
     running: false,
     blank: false,
   }],
-}]
+}))
 
 await agent.connect(workspaces)
 console.log(JSON.stringify({ type: 'ready', endpointId: agent.registrationResult?.endpointId ?? null }))

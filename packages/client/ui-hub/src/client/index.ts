@@ -7,7 +7,7 @@
  */
 
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
-import type { HubStatusResponse, HubWorkspaceListResult } from '@deepseek-ai/dsh-hub-protocol'
+import type { HubStatusResponse, HubWorkspaceListResult, HubWorkspaceRef } from '@deepseek-ai/dsh-hub-protocol'
 import type { RpcResult, SessionId } from '@deepseek-ai/dsh-api-remotes/client'
 import { createRemoteSessionTransport, REMOTE_SESSION_REGISTRY, REMOTE_WORKSPACE_SOURCE, RemoteSessionTransportRegistry, type RemoteWorkspace, type RemoteWorkspaceSource } from '@deepseek-ai/dsh-hub-web-adapter'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
@@ -61,9 +61,9 @@ export function apply(ctx: ClientContext): void {
 
   const remoteWorkspaceSource: RemoteWorkspaceSource = {
     listSelected: async () => {
-      const selected = readSelectedWorkspaceIds()
-      const result = await rpc<HubWorkspaceListResult>('hub/workspaces', { workspaceIds: selected })
-      await rpc('hub/subscribe-workspaces', { workspaceIds: selected })
+      const selected = readSelectedWorkspaceRefs()
+      const result = await rpc<HubWorkspaceListResult>('hub/workspaces', { workspaces: selected })
+      await rpc('hub/subscribe-workspaces', { workspaces: selected })
       const connectedEndpointId = result.endpointId
       const endpointChanged = endpointId !== connectedEndpointId
       endpointId = connectedEndpointId
@@ -153,11 +153,17 @@ async function rpc<T>(method: string, params: Record<string, unknown>): Promise<
   return await response.json() as T
 }
 
-function readSelectedWorkspaceIds(): string[] {
+function readSelectedWorkspaceRefs(): HubWorkspaceRef[] {
   try {
     const value: unknown = JSON.parse(globalThis.localStorage.getItem('dsh.remote.selected-workspaces') ?? '[]')
-    return Array.isArray(value) && value.every(item => typeof item === 'string') ? value : []
+    return Array.isArray(value) && value.every(item => isWorkspaceRef(item)) ? value : []
   } catch {
     return []
   }
+}
+
+function isWorkspaceRef(value: unknown): value is HubWorkspaceRef {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    && typeof (value as Record<string, unknown>).endpointId === 'string'
+    && typeof (value as Record<string, unknown>).workspaceId === 'string'
 }

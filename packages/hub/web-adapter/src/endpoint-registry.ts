@@ -3,21 +3,22 @@ import type { SessionId } from '@deepseek-ai/dsh-api-remotes/client'
 /** Stable identity of a Host that owns sessions. */
 export type SessionEndpointId = `local:${string}` | `remote:${string}`
 
-/** A session identity qualified by its owning endpoint. */
+/** A session identity qualified by its owning endpoint workspace. */
 export interface SessionRef {
   readonly endpointId: SessionEndpointId
+  readonly workspaceId: string
   readonly sessionId: SessionId
 }
 
-/** Collision-free key for an endpoint-qualified session. */
-export type SessionKey = `${SessionEndpointId}|${SessionId}`
+/** Collision-free key for an endpoint-workspace-qualified session. */
+export type SessionKey = `${SessionEndpointId}|${string}|${SessionId}`
 
 /** Build the internal key for one endpoint-qualified session.
  * @param ref - the endpoint-qualified session reference.
  * @returns the collision-free registry key.
  */
 export function sessionKey(ref: SessionRef): SessionKey {
-  return `${ref.endpointId}|${ref.sessionId}`
+  return `${ref.endpointId}|${encodeURIComponent(ref.workspaceId)}|${encodeURIComponent(ref.sessionId)}` as SessionKey
 }
 
 /** Encode a remote session reference for the Web Runtime's single-id UI APIs.
@@ -25,7 +26,7 @@ export function sessionKey(ref: SessionRef): SessionKey {
  * @returns the encoded session id.
  */
 export function qualifiedSessionId(ref: SessionRef): SessionId {
-  return `${ref.endpointId}|${ref.sessionId}` as SessionId
+  return sessionKey(ref) as SessionId
 }
 
 /** Recover the endpoint-qualified reference from an encoded Runtime id.
@@ -33,55 +34,19 @@ export function qualifiedSessionId(ref: SessionRef): SessionId {
  * @returns the decoded remote reference, or undefined for a local or malformed id.
  */
 export function parseQualifiedSessionId(id: SessionId): SessionRef | undefined {
-  const separator = String(id).indexOf('|')
-  if (separator <= 0) return undefined
-  const endpointId = String(id).slice(0, separator)
+  const encoded = String(id)
+  const firstSeparator = encoded.indexOf('|')
+  const secondSeparator = encoded.indexOf('|', firstSeparator + 1)
+  if (firstSeparator <= 0 || secondSeparator <= firstSeparator + 1) return undefined
+  const endpointId = encoded.slice(0, firstSeparator)
   if (!endpointId.startsWith('remote:')) return undefined
-  return { endpointId: endpointId as SessionEndpointId, sessionId: String(id).slice(separator + 1) as SessionId }
-}
-
-/** Owns endpoint bindings shared by the Hub Web adapter consumers. */
-export class SessionEndpointRegistry {
-  private readonly owners = new Map<SessionKey, SessionEndpointId>()
-
-  /** Bind one session to its endpoint.
-   * @param ref - the endpoint-qualified session reference.
-   */
-  bind(ref: SessionRef): void {
-    this.owners.set(sessionKey(ref), ref.endpointId)
-  }
-
-  /** Resolve an already-qualified session reference.
-   * @param ref - the endpoint-qualified session reference.
-   * @returns the owning endpoint, if registered.
-   */
-  resolve(ref: SessionRef): SessionEndpointId | undefined {
-    return this.owners.get(sessionKey(ref))
-  }
-
-  /** Resolve a bare session id only when exactly one endpoint owns it.
-   * @param sessionId - the unqualified session id.
-   * @returns the sole owning endpoint, if one exists.
-   */
-  endpointFor(sessionId: SessionId): SessionEndpointId | undefined {
-    let endpoint: SessionEndpointId | undefined
-    for (const key of this.owners.keys()) {
-      if (!key.endsWith(`|${sessionId}`)) continue
-      const candidate = key.slice(0, key.indexOf('|')) as SessionEndpointId
-      if (endpoint !== undefined && endpoint !== candidate) {
-        throw new Error(`session id is owned by multiple endpoints: ${String(sessionId)}`)
-      }
-      endpoint = candidate
+  try {
+    return {
+      endpointId: endpointId as SessionEndpointId,
+      workspaceId: decodeURIComponent(encoded.slice(firstSeparator + 1, secondSeparator)),
+      sessionId: decodeURIComponent(encoded.slice(secondSeparator + 1)) as SessionId,
     }
-    return endpoint
-  }
-
-  /** Remove all bindings for one bare session id.
-   * @param sessionId - the unqualified session id to remove.
-   */
-  remove(sessionId: SessionId): void {
-    for (const key of this.owners.keys()) {
-      if (key.endsWith(`|${sessionId}`)) this.owners.delete(key)
-    }
+  } catch {
+    return undefined
   }
 }

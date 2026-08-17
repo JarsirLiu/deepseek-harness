@@ -6,13 +6,13 @@ English | [中文](2026-08-15-endpoint-qualified-session-routing.zh.md)
 
 ## Problem
 
-The web client can display sessions supplied by more than one Harness host. A bare session id does not identify the owning host, so a later transport lookup can send a remote operation to the local API or to the wrong remote endpoint.
+The web client can display sessions supplied by more than one endpoint workspace. A bare session id does not identify the owning endpoint or workspace, so a later transport lookup can send a remote operation to the local API, the wrong endpoint, or the wrong workspace on the same endpoint.
 
 ## Decision
 
-Remote session ownership is represented by `SessionRef` and indexed with `SessionKey`, which combines the stable endpoint id and session id. Remote fork children inherit the source endpoint before they enter the client session list. Local sessions retain the `local:default` endpoint and continue to use the local API.
+Remote session ownership is represented by `SessionRef` and indexed with `SessionKey`, which combines the stable endpoint id, selected workspace id, and session id. Remote fork children inherit both the source endpoint and workspace before they enter the client session list. Only workspaces explicitly selected in remote settings are projected into the client runtime. Local sessions retain the `local:default` endpoint and continue to use the local API.
 
-The endpoint id is transport metadata owned by the Hub connection. Session operations must resolve that metadata before selecting a transport; they must not infer ownership from the session id alone.
+The endpoint id and workspace id are routing metadata owned by the selected remote workspace reference. Session operations must resolve that metadata before selecting a transport; they must not infer ownership from the session id alone or from a path.
 
 ## Alternatives considered
 
@@ -22,4 +22,4 @@ The endpoint id is transport metadata owned by the Hub connection. Session opera
 
 ## Consequences
 
-The runtime can qualify endpoint ownership without changing host session ids. The remaining session caches and workspace mutation surfaces must adopt the same reference when they become multi-endpoint aware; they must not add a second source of ownership metadata.
+The runtime can qualify endpoint and workspace ownership without changing Host session ids. Session caches and workspace mutation surfaces use the same reference; they do not add a second source of ownership metadata.

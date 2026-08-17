@@ -11,7 +11,9 @@ const provider = new RemoteSessionProvider({} as never, { uri })
 try {
   await provider.connect()
   const endpoints = await provider.request('hub/list-endpoints', {})
-  const workspaces = await provider.request('hub/workspaces', {})
+  const workspaces = await provider.request('hub/workspaces', requestEndpointId === undefined || requestWorkspaceId === undefined
+    ? {}
+    : { workspaces: [{ endpointId: requestEndpointId, workspaceId: requestWorkspaceId }] })
   const request = requestEndpointId === undefined || requestWorkspaceId === undefined
     ? undefined
     : await provider.request('hub/api/request', {

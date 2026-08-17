@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import {
   JsonRpcWebSocketTransport,
   type HubApiRequestParams,
+  type HubAgentHostEventParams,
   type HubAgentRegisterResult,
   type HubEndpointSummary,
   type JsonRpcTransportPeer,
@@ -80,6 +81,22 @@ export class HubEndpointAgent {
       workspaces: workspaces.map(workspace => ({ ...workspace, endpointId: this.config.endpointId })),
     })
     this.workspaces = new Set(workspaces.map(workspace => workspace.id))
+  }
+
+  /** Publish one unchanged Host API frame with explicit workspace ownership.
+   * @param workspaceId - workspace that owns the frame.
+   * @param frame - unchanged Host API frame.
+   */
+  publishHostEvent(workspaceId: string, frame: HubAgentHostEventParams['frame']): void {
+    const transport = this.transport
+    if (transport === null) throw new Error('Endpoint Agent is not connected')
+    if (!this.workspaces.has(workspaceId)) throw new Error(`Endpoint Agent workspace unavailable: ${workspaceId}`)
+    const event: HubAgentHostEventParams = {
+      endpointId: this.config.endpointId,
+      workspaceId,
+      frame,
+    }
+    transport.notify('hub/agent/host-event', event)
   }
 
   /** Disconnect this Endpoint Agent from the Hub. */

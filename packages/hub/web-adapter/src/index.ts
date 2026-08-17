@@ -11,7 +11,7 @@ import type { AttachmentIdType, ImageAttachmentRef } from '@deepseek-ai/dsh-atta
 import type { HistoryEntry, MessageId, ModelSelection, MuxFrame, PromptContentPart, QueueAction, RpcResult, SessionId, SessionModels, SubagentAddress, SubagentCatalog } from '@deepseek-ai/dsh-api-remotes/client'
 import type { HostFrame, SessionProjectionsBlock } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { SessionEndpointId, SessionRef } from './endpoint-registry.ts'
-export { SessionEndpointRegistry, parseQualifiedSessionId, qualifiedSessionId, sessionKey } from './endpoint-registry.ts'
+export { parseQualifiedSessionId, qualifiedSessionId, sessionKey } from './endpoint-registry.ts'
 export type { SessionEndpointId, SessionKey, SessionRef } from './endpoint-registry.ts'
 type SubagentPromptReceipt = { messageId: MessageId }
 type SubagentInterruptReceipt = { accepted: true }
@@ -26,6 +26,19 @@ export interface RemoteWorkspace {
   readonly title: string
   readonly path: string
   readonly sessions: readonly RemoteWorkspaceSession[]
+}
+
+/** Workspace reference used to scope one remote endpoint subscription. */
+export interface RemoteWorkspaceRef {
+  readonly endpointId: `remote:${string}`
+  readonly workspaceId: string
+}
+
+/** Host frame notification with Hub routing metadata. */
+export interface RemoteHostNotification {
+  readonly endpointId: `remote:${string}`
+  readonly workspaceId: string | null
+  readonly frame: HostFrame
 }
 
 /** Session metadata projected by the owning remote workspace. */
@@ -111,8 +124,8 @@ export interface RemoteSessionTransport {
   ): Promise<RpcResult<{ events: HistoryEntry[]; hasMore: boolean }>>
   subagentPrompt(workspaceId: string, address: Extract<SubagentAddress, { mode: 'continuable' }>, content: PromptContentPart[]): Promise<RpcResult<SubagentPromptReceipt>>
   subagentInterrupt(workspaceId: string, address: Extract<SubagentAddress, { mode: 'continuable' }>): Promise<RpcResult<SubagentInterruptReceipt>>
-  subscribe(sessionId: SessionId, listener: (frame: MuxFrame) => void): () => void
-  subscribeHost(listener: (frame: HostFrame) => void): () => void
+  subscribe(ref: SessionRef, listener: (frame: MuxFrame) => void): () => void
+  subscribeHost(workspaces: readonly RemoteWorkspaceRef[], listener: (notification: RemoteHostNotification) => void): () => void
 }
 
 /** Registry of independently configured remote endpoint transports. */
@@ -201,8 +214,8 @@ export function createRemoteSessionTransport(endpointId: SessionEndpointId | (()
     if (eventSource !== undefined) return
     eventSource = new EventSource('/api/hub/events.mux')
     eventSource.onmessage = (event) => {
-      const notification = parseEventData(event.data) as { endpointId: `remote:${string}`; event: Record<string, unknown>; sessionId: SessionId }
-      const listeners = eventListeners.get(String(notification.sessionId))
+      const notification = parseEventData(event.data) as { endpointId: `remote:${string}`; workspaceId: string; event: Record<string, unknown>; sessionId: SessionId }
+      const listeners = eventListeners.get(`${notification.workspaceId}\u0000${String(notification.sessionId)}`)
       if (listeners === undefined) return
       const frame = { type: 'session/event', sessionId: notification.sessionId, event: notification.event as never, endpointId: notification.endpointId } as RemoteSessionFrame
       for (const listener of listeners) listener(frame)
@@ -245,8 +258,8 @@ export function createRemoteSessionTransport(endpointId: SessionEndpointId | (()
     subagentHistory: (workspaceId, address, payload) => call('hub/api/request', { endpointId: resolveEndpoint(), workspaceId, method: 'subagent.history', payload: { ...address, ...payload } }),
     subagentPrompt: (workspaceId, address, content) => call('hub/api/request', { endpointId: resolveEndpoint(), workspaceId, method: 'subagent.prompt', payload: { ...address, content } }),
     subagentInterrupt: (workspaceId, address) => call('hub/api/request', { endpointId: resolveEndpoint(), workspaceId, method: 'subagent.interrupt', payload: address }),
-    subscribe: (sessionId, listener) => {
-      const key = String(sessionId)
+    subscribe: (ref, listener) => {
+      const key = `${ref.workspaceId}\u0000${String(ref.sessionId)}`
       const listeners = eventListeners.get(key) ?? new Set<(frame: MuxFrame) => void>()
       eventListeners.set(key, listeners)
       listeners.add(listener)
@@ -257,11 +270,14 @@ export function createRemoteSessionTransport(endpointId: SessionEndpointId | (()
         closeEvents()
       }
     },
-    subscribeHost: (listener) => {
+    subscribeHost: (workspaces, listener) => {
+      const workspaceSet = new Set(workspaces.map(workspace => `${workspace.endpointId}\u0000${workspace.workspaceId}`))
       const source = new EventSource('/api/hub/host/stream')
       source.onmessage = (event) => {
-        const notification = parseEventData(event.data) as { frame: HostFrame }
-        listener(notification.frame)
+        const notification = parseEventData(event.data) as RemoteHostNotification
+        if (notification.workspaceId !== null
+          && !workspaceSet.has(`${notification.endpointId}\u0000${notification.workspaceId}`)) return
+        listener(notification)
       }
       return () => { source.close() }
     },

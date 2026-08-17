@@ -115,6 +115,30 @@ describe('Hub endpoint identity across isolated processes', () => {
     children.push(client.child)
     await expect(client.ready).rejects.toThrow('remote endpoint unavailable: remote:registered-agent')
   }, 15_000)
+
+  it('projects only the selected workspace when session ids collide within one Agent', async () => {
+    const port = await freePort()
+    const server = startProcess(serverFixture, [String(port), 'remote:broker-owned'])
+    children.push(server.child)
+    await server.ready
+
+    const agent = startProcess(agentFixture, [String(port), 'remote:multi-agent', 'workspace-a,workspace-b'])
+    children.push(agent.child)
+    await agent.ready
+
+    const client = startProcess(clientFixture, [
+      `ws://127.0.0.1:${port}/hub`, 'remote:multi-agent', 'workspace-b',
+    ])
+    children.push(client.child)
+    const ready = await client.ready
+    const workspaces = ready.workspaces as { workspaces: Array<{ id: string; sessions: Array<{ sessionId: string }> }> }
+    expect(workspaces.workspaces).toEqual([
+      expect.objectContaining({
+        id: 'workspace-b',
+        sessions: [expect.objectContaining({ sessionId: 'shared-session' })],
+      }),
+    ])
+  }, 15_000)
 })
 
 function startProcess(script: string, args: readonly string[]): RunningProcess {

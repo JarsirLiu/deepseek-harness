@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { HubStatusResponse, HubWorkspaceEntry, HubWorkspaceListResult } from '@deepseek-ai/dsh-hub-protocol'
+import type { HubStatusResponse, HubWorkspaceEntry, HubWorkspaceListResult, HubWorkspaceRef } from '@deepseek-ai/dsh-hub-protocol'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { HubLocaleKey } from './locales.ts'
 import css from './HubSection.module.css'
@@ -59,14 +59,16 @@ const STATUS_DOT_CLASS: Record<HubStatusResponse['status'], string> = {
 export function HubSection({ t, loadStatus, loadWorkspaces, reconnect }: HubSectionProps): ReactNode {
   const [state, setState] = useState<ViewState>({ kind: 'loading' })
   const [workspaces, setWorkspaces] = useState<HubWorkspaceEntry[]>([])
-  const [selectedIds, setSelectedIds] = useState<string[]>(() => readSelectedWorkspaceIds())
+  const [selectedRefs, setSelectedRefs] = useState<HubWorkspaceRef[]>(() => readSelectedWorkspaceRefs())
   const [workspacesVersion, setWorkspacesVersion] = useState(0)
 
-  const toggleWorkspace = (workspaceId: string): void => {
-    const next = selectedIds.includes(workspaceId)
-      ? selectedIds.filter(id => id !== workspaceId)
-      : [...selectedIds, workspaceId]
-    setSelectedIds(next)
+  const toggleWorkspace = (workspace: HubWorkspaceEntry): void => {
+    const ref = { endpointId: workspace.endpointId, workspaceId: workspace.id } satisfies HubWorkspaceRef
+    const selected = selectedRefs.some(item => item.endpointId === ref.endpointId && item.workspaceId === ref.workspaceId)
+    const next = selected
+      ? selectedRefs.filter(item => item.endpointId !== ref.endpointId || item.workspaceId !== ref.workspaceId)
+      : [...selectedRefs, ref]
+    setSelectedRefs(next)
     globalThis.localStorage.setItem(SELECTED_WORKSPACES_KEY, JSON.stringify(next))
     globalThis.dispatchEvent(new CustomEvent('dsh:remote-workspaces-changed'))
   }
@@ -180,11 +182,11 @@ export function HubSection({ t, loadStatus, loadWorkspaces, reconnect }: HubSect
           {workspaces.length === 0
             ? <span className={css.emptyText}>{t('noWorkspaces')}</span>
             : workspaces.map(workspace => (
-              <label className={css.workspaceItem} key={workspace.id}>
+              <label className={css.workspaceItem} key={`${workspace.endpointId}|${workspace.id}`}>
                 <input
                   type="checkbox"
-                  checked={selectedIds.includes(workspace.id)}
-                  onChange={() => { toggleWorkspace(workspace.id) }}
+                  checked={selectedRefs.some(item => item.endpointId === workspace.endpointId && item.workspaceId === workspace.id)}
+                  onChange={() => { toggleWorkspace(workspace) }}
                 />
                 <span>
                   <strong>{workspace.title}</strong>
@@ -200,11 +202,17 @@ export function HubSection({ t, loadStatus, loadWorkspaces, reconnect }: HubSect
 
 const SELECTED_WORKSPACES_KEY = 'dsh.remote.selected-workspaces'
 
-function readSelectedWorkspaceIds(): string[] {
+function readSelectedWorkspaceRefs(): HubWorkspaceRef[] {
   try {
     const value: unknown = JSON.parse(globalThis.localStorage.getItem(SELECTED_WORKSPACES_KEY) ?? '[]')
-    return Array.isArray(value) && value.every(item => typeof item === 'string') ? value : []
+    return Array.isArray(value) && value.every(item => isWorkspaceRef(item)) ? value : []
   } catch {
     return []
   }
+}
+
+function isWorkspaceRef(value: unknown): value is HubWorkspaceRef {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    && typeof (value as Record<string, unknown>).endpointId === 'string'
+    && typeof (value as Record<string, unknown>).workspaceId === 'string'
 }

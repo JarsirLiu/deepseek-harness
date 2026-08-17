@@ -2,10 +2,11 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type {
-  DirectoryListing, HostFrame, IApiClient, RpcError,
+  DirectoryListing, IApiClient, RpcError,
   SessionId, WorkspaceId, WorkspaceView,
 } from '@deepseek-ai/dsh-api-remotes/client'
 import { parseQualifiedSessionId, qualifiedSessionId, REMOTE_SESSION_REGISTRY, REMOTE_WORKSPACE_SOURCE, type RemoteSessionTransportRegistry, type RemoteWorkspace, type RemoteWorkspaceSource } from '@deepseek-ai/dsh-hub-web-adapter'
+import type { RemoteHostNotification, RemoteWorkspaceRef } from '@deepseek-ai/dsh-hub-web-adapter'
 import type { SnapshotStore } from '../contract/store.ts'
 import { createSnapshotStore } from '../contract/store.ts'
 import type { SessionsPort, SessionsPortList } from '../contract/sessions-port.ts'
@@ -116,7 +117,7 @@ export class WorkspaceRuntime implements IWorkspaces {
       if (remoteSource === undefined) throw new Error(`remote workspace source unavailable: ${String(workspaceId)}`)
       const attempt = remoteSource.createSession(remote).then(async (sessionId) => {
         await this.sessions.refreshRemoteSessions?.()
-        return qualifiedSessionId({ endpointId: remote.endpointId, sessionId })
+        return qualifiedSessionId({ endpointId: remote.endpointId, workspaceId: remote.workspaceId, sessionId })
       }).finally(() => { this.connecting.delete(workspaceId) })
       this.connecting.set(workspaceId, attempt)
       return attempt
@@ -444,34 +445,36 @@ export class WorkspaceRuntime implements IWorkspaces {
 
   /** Keep workspace-owned remote state aligned with endpoint host events. */
   private syncRemoteHostSubscriptions(workspaces: readonly RemoteWorkspace[]): void {
-    const endpoints = new Set(workspaces.map(workspace => workspace.endpointId))
+    for (const dispose of this.remoteHostSubscriptions.values()) dispose()
+    this.remoteHostSubscriptions.clear()
+    const byEndpoint = new Map<`remote:${string}`, RemoteWorkspaceRef[]>()
     for (const workspace of workspaces) {
-      if (this.remoteHostSubscriptions.has(workspace.endpointId)) continue
-      const transport = (this.ctx.get(REMOTE_SESSION_REGISTRY) as RemoteSessionTransportRegistry | undefined)
-        ?.get(workspace.endpointId)
-      if (transport === undefined) continue
-      this.remoteHostSubscriptions.set(workspace.endpointId, transport.subscribeHost((frame) => {
-        this.handleRemoteHostFrame(frame, workspace.endpointId)
-      }))
+      const refs = byEndpoint.get(workspace.endpointId) ?? []
+      refs.push({ endpointId: workspace.endpointId, workspaceId: workspace.workspaceId })
+      byEndpoint.set(workspace.endpointId, refs)
     }
-    for (const [endpointId, dispose] of this.remoteHostSubscriptions) {
-      if (!endpoints.has(endpointId)) {
-        dispose()
-        this.remoteHostSubscriptions.delete(endpointId)
-      }
+    for (const [endpointId, refs] of byEndpoint) {
+      const transport = (this.ctx.get(REMOTE_SESSION_REGISTRY) as RemoteSessionTransportRegistry | undefined)
+        ?.get(endpointId)
+      if (transport === undefined) continue
+      this.remoteHostSubscriptions.set(endpointId, transport.subscribeHost(refs, (notification: RemoteHostNotification) => {
+        this.handleRemoteHostFrame(notification)
+      }))
     }
   }
 
   /** Apply only remote Host events that change the workspace projection. */
-  private handleRemoteHostFrame(frame: HostFrame, endpointId: `remote:${string}`): void {
+  private handleRemoteHostFrame(notification: RemoteHostNotification): void {
+    const { frame, endpointId } = notification
     switch (frame.type) {
       case 'host/archived-sessions-changed':
+        if (notification.workspaceId === null) return
         this.manager.handleHostEnvelope({
           rpcId: 'remote-hub-host' as never,
           payload: {
             ...frame,
             archivedSessionIds: frame.archivedSessionIds.map(sessionId =>
-              qualifiedSessionId({ endpointId, sessionId })),
+              qualifiedSessionId({ endpointId, workspaceId: notification.workspaceId, sessionId })),
           },
         })
         return
@@ -529,7 +532,11 @@ function toRemoteWorkspaceView(workspace: RemoteWorkspace): WorkspaceView {
     workspaceId: `remote:${workspace.endpointId.slice('remote:'.length)}|${workspace.workspaceId}` as WorkspaceId,
     path: workspace.path,
     title: workspace.title,
-    sessionIds: workspace.sessions.map(session => qualifiedSessionId({ endpointId: session.endpointId, sessionId: session.sessionId })),
+    sessionIds: workspace.sessions.map(session => qualifiedSessionId({
+      endpointId: session.endpointId,
+      workspaceId: workspace.workspaceId,
+      sessionId: session.sessionId,
+    })),
     createdAt: new Date(0).toISOString(),
     updatedAt: new Date(0).toISOString(),
   }

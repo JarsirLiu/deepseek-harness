@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { SessionId } from '@deepseek-ai/dsh-api-remotes/client'
-import { createRemoteSessionTransport, parseQualifiedSessionId, qualifiedSessionId, RemoteSessionTransportRegistry, resolveRemoteSessionTransport, SessionEndpointRegistry, sessionKey } from '../src/index.ts'
+import { createRemoteSessionTransport, parseQualifiedSessionId, qualifiedSessionId, RemoteSessionTransportRegistry, resolveRemoteSessionTransport, sessionKey } from '../src/index.ts'
 
 type HubRequest = {
   method: string
@@ -14,41 +14,20 @@ function requestBody(init: RequestInit | undefined): HubRequest {
 
 describe('Hub Web adapter endpoint ownership', () => {
   it('encodes and parses endpoint-qualified session references', () => {
-    const ref = { endpointId: 'remote:first' as const, sessionId: 'same-session' as SessionId }
-    expect(sessionKey(ref)).toBe('remote:first|same-session')
-    expect(qualifiedSessionId(ref)).toBe('remote:first|same-session')
+    const ref = { endpointId: 'remote:first' as const, workspaceId: 'workspace/a', sessionId: 'same-session' as SessionId }
+    expect(sessionKey(ref)).toBe('remote:first|workspace%2Fa|same-session')
+    expect(qualifiedSessionId(ref)).toBe('remote:first|workspace%2Fa|same-session')
     expect(parseQualifiedSessionId(qualifiedSessionId(ref))).toEqual(ref)
     expect(parseQualifiedSessionId('same-session' as SessionId)).toBeUndefined()
     expect(parseQualifiedSessionId('local:default|same-session' as SessionId)).toBeUndefined()
-    expect(parseQualifiedSessionId('remote:first|' as SessionId)).toEqual({ endpointId: 'remote:first', sessionId: '' })
-  })
-
-  it('detects ambiguous bare session ownership and removes all matches', () => {
-    const registry = new SessionEndpointRegistry()
-    const sessionId = 'same-session' as SessionId
-    registry.bind({ endpointId: 'remote:first', sessionId })
-    expect(registry.resolve({ endpointId: 'remote:first', sessionId })).toBe('remote:first')
-    expect(registry.endpointFor(sessionId)).toBe('remote:first')
-    registry.bind({ endpointId: 'remote:second', sessionId })
-    expect(() => registry.endpointFor(sessionId)).toThrow(/multiple endpoints/)
-    registry.remove(sessionId)
-    expect(registry.resolve({ endpointId: 'remote:first', sessionId })).toBeUndefined()
-    expect(registry.endpointFor(sessionId)).toBeUndefined()
-  })
-
-  it('ignores unrelated bindings when resolving or removing a bare id', () => {
-    const registry = new SessionEndpointRegistry()
-    registry.bind({ endpointId: 'remote:first', sessionId: 'other-session' as SessionId })
-    registry.bind({ endpointId: 'remote:second', sessionId: 'same-session' as SessionId })
-    expect(registry.endpointFor('missing-session' as SessionId)).toBeUndefined()
-    registry.remove('missing-session' as SessionId)
-    expect(registry.endpointFor('same-session' as SessionId)).toBe('remote:second')
+    expect(parseQualifiedSessionId('remote:first|' as SessionId)).toBeUndefined()
+    expect(qualifiedSessionId({ ...ref, workspaceId: 'workspace-b' })).not.toBe(qualifiedSessionId(ref))
   })
 
   it('does not let one endpoint claim another endpoint session', () => {
     const first = createRemoteSessionTransport('remote:first')
     const second = createRemoteSessionTransport('remote:second')
-    const ref = { endpointId: 'remote:second' as const, sessionId: 'same-session' as SessionId }
+    const ref = { endpointId: 'remote:second' as const, workspaceId: 'workspace-a', sessionId: 'same-session' as SessionId }
 
     expect(first.owns(ref)).toBe(false)
     expect(second.owns(ref)).toBe(true)
@@ -61,7 +40,7 @@ describe('Hub Web adapter endpoint ownership', () => {
 
     expect(resolveRemoteSessionTransport(transport, {
       endpointId: 'local:default',
-      sessionId: 'same-session' as SessionId,
+      workspaceId: 'workspace-a', sessionId: 'same-session' as SessionId,
     })).toBeUndefined()
   })
 
@@ -73,10 +52,10 @@ describe('Hub Web adapter endpoint ownership', () => {
     registry.register(second)
 
     expect(registry.endpoints()).toEqual(['remote:first', 'remote:second'])
-    expect(registry.resolve({ endpointId: 'remote:second', sessionId: 'same-session' as SessionId })).toBe(second)
+    expect(registry.resolve({ endpointId: 'remote:second', workspaceId: 'workspace-a', sessionId: 'same-session' as SessionId })).toBe(second)
     disposeFirst()
     expect(registry.endpoints()).toEqual(['remote:second'])
-    expect(() => registry.resolve({ endpointId: 'remote:first', sessionId: 'same-session' as SessionId })).toThrow(/remote endpoint unavailable/)
+    expect(() => registry.resolve({ endpointId: 'remote:first', workspaceId: 'workspace-a', sessionId: 'same-session' as SessionId })).toThrow(/remote endpoint unavailable/)
   })
 
   it('rejects duplicate endpoints and exposes registered transports', () => {
@@ -94,7 +73,7 @@ describe('Hub Web adapter endpoint ownership', () => {
     const registry = new RemoteSessionTransportRegistry()
     registry.register(createRemoteSessionTransport('remote:first'))
 
-    expect(() => registry.resolve({ endpointId: 'local:default', sessionId: 'same-session' as SessionId })).toThrow(/local session cannot use/)
+    expect(() => registry.resolve({ endpointId: 'local:default', workspaceId: 'workspace-a', sessionId: 'same-session' as SessionId })).toThrow(/local session cannot use/)
   })
 
   it('preserves the official history view and projection baseline', async () => {
@@ -261,11 +240,12 @@ describe('Hub Web adapter endpoint ownership', () => {
     const transport = createRemoteSessionTransport('remote:first')
     const first = vi.fn()
     const second = vi.fn()
-    const disposeFirst = transport.subscribe('session-1' as SessionId, first)
-    const disposeSecond = transport.subscribe('session-1' as SessionId, second)
+    const sessionRef = { endpointId: 'remote:first' as const, workspaceId: 'workspace-a', sessionId: 'session-1' as SessionId }
+    const disposeFirst = transport.subscribe(sessionRef, first)
+    const disposeSecond = transport.subscribe(sessionRef, second)
     const source = FakeEventSource.instances[0]!
     source.onmessage?.({ data: JSON.stringify({ endpointId: 'remote:first', sessionId: 'other', event: {} }) } as MessageEvent)
-    source.onmessage?.({ data: JSON.stringify({ endpointId: 'remote:first', sessionId: 'session-1', event: { seq: 1 } }) } as MessageEvent)
+    source.onmessage?.({ data: JSON.stringify({ endpointId: 'remote:first', workspaceId: 'workspace-a', sessionId: 'session-1', event: { seq: 1 } }) } as MessageEvent)
     expect(first).toHaveBeenCalledOnce()
     expect(second).toHaveBeenCalledOnce()
     disposeFirst()
@@ -273,9 +253,9 @@ describe('Hub Web adapter endpoint ownership', () => {
     const reconnected = FakeEventSource.instances.at(-1)!
     expect(reconnected).not.toBe(source)
     const host = vi.fn()
-    const disposeHost = transport.subscribeHost(host)
+    const disposeHost = transport.subscribeHost([{ endpointId: 'remote:first', workspaceId: 'workspace-a' }], (notification) => { host(notification.frame) })
     const hostSource = FakeEventSource.instances.at(-1)!
-    hostSource.onmessage?.({ data: JSON.stringify({ frame: { type: 'host/session-status' } }) } as MessageEvent)
+    hostSource.onmessage?.({ data: JSON.stringify({ endpointId: 'remote:first', workspaceId: 'workspace-a', frame: { type: 'host/session-status' } }) } as MessageEvent)
     expect(host).toHaveBeenCalledWith({ type: 'host/session-status' })
     disposeHost()
     disposeSecond()
@@ -289,10 +269,10 @@ describe('Hub Web adapter endpoint ownership', () => {
     let endpoint: 'remote:first' | 'remote:second' = 'remote:first'
     const transport = createRemoteSessionTransport(() => endpoint)
     expect(transport.endpointId).toBe('remote:first')
-    expect(transport.owns({ endpointId: 'remote:first', sessionId: 'session-1' as SessionId })).toBe(true)
+    expect(transport.owns({ endpointId: 'remote:first', workspaceId: 'workspace-a', sessionId: 'session-1' as SessionId })).toBe(true)
     endpoint = 'remote:second'
     expect(transport.endpointId).toBe('remote:second')
-    expect(transport.owns({ endpointId: 'remote:first', sessionId: 'session-1' as SessionId })).toBe(false)
+    expect(transport.owns({ endpointId: 'remote:first', workspaceId: 'workspace-a', sessionId: 'session-1' as SessionId })).toBe(false)
   })
 
   it('omits an undefined fork sequence from the forwarded payload', async () => {

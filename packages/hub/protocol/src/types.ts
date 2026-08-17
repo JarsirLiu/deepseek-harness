@@ -85,6 +85,14 @@ export interface HubWorkspaceListResult {
   workspaces: HubWorkspaceEntry[]
 }
 
+/** One workspace selected for Host event delivery through a Hub connection. */
+export interface HubWorkspaceRef {
+  /** Endpoint that owns the workspace. */
+  endpointId: `remote:${string}`
+  /** Workspace owned by the endpoint. */
+  workspaceId: string
+}
+
 /** One endpoint currently visible through a Hub listener. */
 export interface HubEndpointSummary {
   /** Stable identity of the endpoint that owns the published resources. */
@@ -215,6 +223,8 @@ export type HubAgentCancelResult = Record<string, never>
 export interface HubSubscribeParams {
   /** Session id to subscribe to; omit for all sessions. */
   id?: SessionId
+  /** Workspace that owns the session; required when `id` is present. */
+  workspaceId?: string
 }
 
 /** A session event notification pushed from the hub. */
@@ -223,6 +233,8 @@ export interface HubEventNotification {
   endpointId: `remote:${string}`
   /** Session the event belongs to. */
   sessionId: SessionId
+  /** Workspace that owns the session. */
+  workspaceId: string
   /** The full session-log event envelope. */
   event: SessionEvent
 }
@@ -231,6 +243,8 @@ export interface HubEventNotification {
 export interface HubHostNotification {
   /** Stable endpoint identity assigned by the publishing Hub. */
   endpointId: `remote:${string}`
+  /** Workspace that owns the frame, or null for an endpoint-wide frame. */
+  workspaceId: string | null
   /** The unchanged payload emitted by api.events.host. */
   frame: HostFrame
 }
@@ -241,8 +255,20 @@ export interface HubStatusNotification {
   endpointId: `remote:${string}`
   /** Session whose status changed. */
   sessionId: SessionId
+  /** Workspace that owns the session. */
+  workspaceId: string
   /** The new status. */
   status: 'idle' | 'running' | 'created' | 'disposed'
+}
+
+/** Host event published by an Endpoint Agent with explicit workspace ownership. */
+export interface HubAgentHostEventParams {
+  /** Endpoint that owns the event source. */
+  endpointId: `remote:${string}`
+  /** Workspace that owns the frame. */
+  workspaceId: string
+  /** Unchanged Host API frame. */
+  frame: HostFrame
 }
 
 // ── Hub protocol capability advertisement ──────────────────────────
@@ -309,8 +335,8 @@ export interface HubRequestMap {
   'hub/api/request': { params: HubApiRequestParams; result: unknown }
   'hub/list': { params: HubListParams; result: HubListResult }
   'hub/list-endpoints': { params: Record<string, never>; result: HubEndpointListResult }
-  'hub/workspaces': { params: { workspaceIds?: string[] }; result: HubWorkspaceListResult }
+  'hub/workspaces': { params: { workspaces?: HubWorkspaceRef[] }; result: HubWorkspaceListResult }
   'hub/subscribe': { params: HubSubscribeParams; result: HubAppendResult }
   'hub/unsubscribe': { params: HubSubscribeParams; result: HubAppendResult }
-  'hub/subscribe-workspaces': { params: { workspaceIds?: string[] }; result: HubAppendResult }
+  'hub/subscribe-workspaces': { params: { workspaces?: HubWorkspaceRef[] }; result: HubAppendResult }
 }

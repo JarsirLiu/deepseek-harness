@@ -10,29 +10,32 @@ import { createServer } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import { isHostFrameVisibleToWorkspaces, type WorkspaceSubscriptionEntry } from './workspace-subscription.ts'
-export { isHostFrameVisibleToWorkspaces } from './workspace-subscription.ts'
+import { hostFrameWorkspaceIds, isHostFrameVisibleToWorkspaces, type WorkspaceSubscriptionEntry } from './workspace-subscription.ts'
+export { hostFrameWorkspaceIds, isHostFrameVisibleToWorkspaces } from './workspace-subscription.ts'
 import {
   JsonRpcWebSocketTransport,
   type HubHandshakeParams,
   type HubHandshakeResult,
   type HubCapabilities,
   type HubAgentRegisterParams,
+  type HubAgentHostEventParams,
   type HubApiRequestParams,
   type HubEndpointSummary,
   type HubWorkspaceEntry,
   type HubEventNotification,
   type HubHostNotification,
   type HubStatusNotification,
+  type HubWorkspaceRef,
 } from '@deepseek-ai/dsh-hub-protocol'
 
 /** A connected client session record. */
 interface ClientRecord {
   id: string
+  socket: WebSocket
   transport: JsonRpcWebSocketTransport
-  subscribedSessions: Set<SessionId>
+  subscribedSessions: Set<string>
   subscribedAll: boolean
-  subscribedWorkspaces: Set<string>
+  subscribedWorkspaces: Map<`remote:${string}`, Set<string>>
   authenticated: boolean
   role: 'client' | 'agent'
   endpointId?: `remote:${string}`
@@ -132,27 +135,35 @@ export class HubServer {
     // Subscribe to session events for forwarding to subscribed clients.
     this.eventDisposers.push(this.ctx.on('session/event', (_session, event) => {
       const sessionId = _session.id
-      const notification: HubEventNotification = { endpointId: this.config.endpointId, sessionId, event }
-      this.broadcastToSubscribers(sessionId, 'hub/event', notification)
+      const workspaceId = this.workspaceForSession(sessionId)
+      if (workspaceId === undefined) return
+      const notification: HubEventNotification = { endpointId: this.config.endpointId, workspaceId, sessionId, event }
+      this.broadcastToSubscribers(workspaceId, sessionId, 'hub/event', notification)
     }))
 
     // Subscribe to session lifecycle events.
     this.eventDisposers.push(this.ctx.on('session/created', (session) => {
+      const workspaceId = this.workspaceForSession(session.id)
+      if (workspaceId === undefined) return
       const notification: HubStatusNotification = {
         endpointId: this.config.endpointId,
+        workspaceId,
         sessionId: session.id,
         status: 'created',
       }
-      this.broadcastToSubscribers(session.id, 'hub/status', notification)
+      this.broadcastToSubscribers(notification.workspaceId, session.id, 'hub/status', notification)
     }))
 
     this.eventDisposers.push(this.ctx.on('session/disposed', (session) => {
+      const workspaceId = this.workspaceForSession(session.id)
+      if (workspaceId === undefined) return
       const notification: HubStatusNotification = {
         endpointId: this.config.endpointId,
+        workspaceId,
         sessionId: session.id,
         status: 'disposed',
       }
-      this.broadcastToSubscribers(session.id, 'hub/status', notification)
+      this.broadcastToSubscribers(notification.workspaceId, session.id, 'hub/status', notification)
     }))
   }
 
@@ -168,6 +179,7 @@ export class HubServer {
     for (const [id, client] of this.clients) {
       client.hostAbortController?.abort()
       client.transport.close()
+      client.socket.close()
       this.clients.delete(id)
     }
     this.wss.close()
@@ -181,10 +193,11 @@ export class HubServer {
     const clientId = `client_${randomUUID().replaceAll('-', '')}`
     const client: ClientRecord = {
       id: clientId,
+      socket: ws,
       transport,
       subscribedSessions: new Set(),
       subscribedAll: false,
-      subscribedWorkspaces: new Set(),
+      subscribedWorkspaces: new Map(),
       authenticated: this.config.authTokens.length === 0,
       role: 'client',
     }
@@ -192,6 +205,9 @@ export class HubServer {
 
     transport.onRequest(async (method, params) => {
       return this.handleRequest(client, method, params)
+    })
+    transport.onNotification((method, params) => {
+      if (method === 'hub/agent/host-event') this.handleAgentHostEvent(client, parseAgentHostEventParams(params))
     })
 
     transport.start()
@@ -223,7 +239,7 @@ export class HubServer {
       case 'hub/list-endpoints':
         return this.handleListEndpoints(client)
       case 'hub/workspaces':
-        return await this.handleWorkspaces(params)
+        return await this.handleWorkspaces(parseWorkspaceSubscriptionParams(params))
       case 'hub/api/request':
         return await this.handleApiRequest(parseApiRequestParams(params))
       case 'hub/subscribe':
@@ -231,7 +247,7 @@ export class HubServer {
       case 'hub/unsubscribe':
         return this.handleUnsubscribe(client, params)
       case 'hub/subscribe-workspaces':
-        return this.handleWorkspaceSubscription(client, params)
+        return this.handleWorkspaceSubscription(client, parseWorkspaceSubscriptionParams(params))
       default:
         throw new Error(`unknown hub method: ${method}`)
     }
@@ -323,15 +339,24 @@ export class HubServer {
     void (async () => {
       try {
         for await (const envelope of host({ rpcId: `hub-host-${randomUUID()}`, payload: {} }, controller.signal)) {
-          if (!isHostFrameVisibleToWorkspaces(envelope.payload, client.subscribedWorkspaces, this.workspaceEntries())) continue
-          const notification: HubHostNotification = { endpointId: this.config.endpointId, frame: envelope.payload }
-          try { client.transport.notify('hub/host', notification) } catch { return }
+          const workspaces = this.workspaceEntries()
+          if (!isHostFrameVisibleToWorkspaces(envelope.payload, this.localSubscribedWorkspaces(client), workspaces)) continue
+          const workspaceIds = hostFrameWorkspaceIds(envelope.payload, workspaces)
+          const notifications: HubHostNotification[] = workspaceIds.length === 0
+            ? [{ endpointId: this.config.endpointId, workspaceId: null, frame: envelope.payload }]
+            : workspaceIds.map(workspaceId => ({ endpointId: this.config.endpointId, workspaceId, frame: envelope.payload }))
+          for (const notification of notifications) {
+            if (notification.workspaceId !== null
+              && !this.localSubscribedWorkspaces(client).has(notification.workspaceId)) continue
+            try { client.transport.notify('hub/host', notification) } catch { return }
+          }
         }
       } catch (error) {
         if (!controller.signal.aborted) {
           try {
             client.transport.notify('hub/host', {
               endpointId: this.config.endpointId,
+              workspaceId: null,
               frame: { type: 'stream/error', error: { code: 'internal', message: error instanceof Error ? error.message : String(error) } },
             })
           } catch { /* disconnected client */ }
@@ -341,9 +366,34 @@ export class HubServer {
   }
 
   /** Update the workspace filter applied before forwarding the host stream. */
-  private handleWorkspaceSubscription(client: ClientRecord, params: { workspaceIds?: string[] }): Record<string, never> {
-    client.subscribedWorkspaces = new Set(params.workspaceIds ?? [])
+  private handleWorkspaceSubscription(client: ClientRecord, params: { workspaces?: HubWorkspaceRef[] }): Record<string, never> {
+    client.subscribedWorkspaces = new Map()
+    for (const workspace of params.workspaces ?? []) {
+      const ids = client.subscribedWorkspaces.get(workspace.endpointId) ?? new Set<string>()
+      ids.add(workspace.workspaceId)
+      client.subscribedWorkspaces.set(workspace.endpointId, ids)
+    }
     return {}
+  }
+
+  private handleAgentHostEvent(client: ClientRecord, params: HubAgentHostEventParams): void {
+    if (client.role !== 'agent' || client.endpointId !== params.endpointId) throw new Error('Endpoint Agent registration required')
+    if (!client.workspaces?.some(workspace => workspace.id === params.workspaceId)) {
+      throw new Error(`remote workspace unavailable: ${params.endpointId}/${params.workspaceId}`)
+    }
+    this.broadcastHostNotification({ endpointId: params.endpointId, workspaceId: params.workspaceId, frame: params.frame })
+  }
+
+  private localSubscribedWorkspaces(client: ClientRecord): ReadonlySet<string> {
+    return client.subscribedWorkspaces.get(this.config.endpointId) ?? new Set()
+  }
+
+  private broadcastHostNotification(notification: HubHostNotification): void {
+    for (const client of this.clients.values()) {
+      const selected = client.subscribedWorkspaces.get(notification.endpointId)
+      if (selected === undefined || (notification.workspaceId !== null && !selected.has(notification.workspaceId))) continue
+      try { client.transport.notify('hub/host', notification) } catch { /* disconnected client */ }
+    }
   }
 
   /** Read the current workspace membership used by the host stream filter. */
@@ -368,7 +418,7 @@ export class HubServer {
   }
 
   /** List directories registered by the remote device's workspace service. */
-  private async handleWorkspaces(params: { workspaceIds?: string[] } = {}): Promise<import('@deepseek-ai/dsh-hub-protocol').HubWorkspaceListResult> {
+  private async handleWorkspaces(params: { workspaces?: HubWorkspaceRef[] } = {}): Promise<import('@deepseek-ai/dsh-hub-protocol').HubWorkspaceListResult> {
     const registry = this.ctx.get('workspaceRegistry') as {
       list: () => Array<{ id: string; title: string; path: string; sessionIds: SessionId[] }>
       archivedSessionIds: readonly SessionId[]
@@ -420,7 +470,9 @@ export class HubServer {
         : summary] as const
     })))
     const archived = registry === undefined ? new Set<SessionId>() : new Set(registry.archivedSessionIds)
-    const selected = params.workspaceIds === undefined ? undefined : new Set(params.workspaceIds)
+    const selected = params.workspaces === undefined ? undefined : new Set(
+      params.workspaces.map(workspace => `${workspace.endpointId}\u0000${workspace.workspaceId}`),
+    )
     const localWorkspaces = registry === undefined
       ? []
       : registry.list().map(workspace => ({
@@ -435,7 +487,7 @@ export class HubServer {
     return {
       endpointId: this.config.endpointId,
       workspaces: [...localWorkspaces, ...agentWorkspaces]
-        .filter(workspace => selected === undefined || selected.has(workspace.id))
+        .filter(workspace => selected === undefined || selected.has(`${workspace.endpointId}\u0000${workspace.id}`))
         .map(workspace => ({
           ...workspace,
           sessions: workspace.sessions.flatMap((sessionOrId) => {
@@ -496,20 +548,22 @@ export class HubServer {
 
   private handleSubscribe(
     client: ClientRecord,
-    params: { id?: SessionId },
+    params: { id?: SessionId; workspaceId?: string },
   ): Record<string, never> {
     if (params.id) {
-      client.subscribedSessions.add(params.id)
+      if (params.workspaceId === undefined || params.workspaceId === '') throw new Error('workspaceId is required for a session subscription')
+      client.subscribedSessions.add(sessionSubscriptionKey(params.workspaceId, params.id))
     } else client.subscribedAll = true
     return {}
   }
 
   private handleUnsubscribe(
     client: ClientRecord,
-    params: { id?: SessionId },
+    params: { id?: SessionId; workspaceId?: string },
   ): Record<string, never> {
     if (params.id) {
-      client.subscribedSessions.delete(params.id)
+      if (params.workspaceId === undefined || params.workspaceId === '') throw new Error('workspaceId is required for a session subscription')
+      client.subscribedSessions.delete(sessionSubscriptionKey(params.workspaceId, params.id))
     } else {
       client.subscribedAll = false
       client.subscribedSessions.clear()
@@ -519,12 +573,13 @@ export class HubServer {
 
   /** Broadcast a notification to all clients subscribed to a specific session. */
   private broadcastToSubscribers(
+    workspaceId: string,
     sessionId: SessionId,
     method: string,
     notification: HubEventNotification | HubStatusNotification,
   ): void {
     for (const client of this.clients.values()) {
-      if (client.subscribedAll || client.subscribedSessions.has(sessionId)) {
+      if (client.subscribedAll || client.subscribedSessions.has(sessionSubscriptionKey(workspaceId, sessionId))) {
         try {
           client.transport.notify(method, notification)
         } catch {
@@ -533,6 +588,15 @@ export class HubServer {
       }
     }
   }
+
+  private workspaceForSession(sessionId: SessionId): string | undefined {
+    const registry = this.ctx.get('workspaceRegistry') as { list: () => Array<{ id: string; sessionIds: SessionId[] }> } | undefined
+    return registry?.list().find(workspace => workspace.sessionIds.includes(sessionId))?.id
+  }
+}
+
+function sessionSubscriptionKey(workspaceId: string, sessionId: SessionId): string {
+  return `${workspaceId}\u0000${String(sessionId)}`
 }
 
 function parseApiRequestParams(params: Record<string, unknown>): HubApiRequestParams {
@@ -573,6 +637,36 @@ function parseAgentRegisterParams(params: Record<string, unknown>): HubAgentRegi
 
 function parseWorkspacePublishParams(params: Record<string, unknown>): { workspaces: HubWorkspaceEntry[] } {
   return { workspaces: parseWorkspaces(params.workspaces) }
+}
+
+function parseWorkspaceSubscriptionParams(params: Record<string, unknown>): { workspaces?: HubWorkspaceRef[] } {
+  if (params.workspaces === undefined) return {}
+  if (!Array.isArray(params.workspaces)) throw new Error('invalid Hub workspace subscription')
+  return {
+    workspaces: params.workspaces.map((workspace) => {
+      if (!isRecord(workspace)
+        || typeof workspace.endpointId !== 'string'
+        || !/^remote:[^\s]+$/u.test(workspace.endpointId)
+        || typeof workspace.workspaceId !== 'string'
+        || workspace.workspaceId === '') {
+        throw new Error('invalid Hub workspace subscription')
+      }
+      return workspace as unknown as HubWorkspaceRef
+    }),
+  }
+}
+
+function parseAgentHostEventParams(params: Record<string, unknown>): HubAgentHostEventParams {
+  if (typeof params.endpointId !== 'string' || !/^remote:[^\s]+$/u.test(params.endpointId)
+    || typeof params.workspaceId !== 'string' || params.workspaceId === ''
+    || !isRecord(params.frame) || typeof params.frame.type !== 'string') {
+    throw new Error('invalid Endpoint Agent Host event')
+  }
+  return {
+    endpointId: params.endpointId as `remote:${string}`,
+    workspaceId: params.workspaceId,
+    frame: params.frame as HubAgentHostEventParams['frame'],
+  }
 }
 
 function parseWorkspaces(value: unknown): HubWorkspaceEntry[] {

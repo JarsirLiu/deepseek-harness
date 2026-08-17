@@ -14,6 +14,7 @@ import {
   type HubHandshakeResult,
   type HubEventNotification,
   type HubHostNotification,
+  type HubWorkspaceRef,
   type HubStatusNotification,
 } from '@deepseek-ai/dsh-hub-protocol'
 
@@ -123,7 +124,7 @@ export class RemoteSessionProvider {
       transport.onNotification((method, params) => {
         if (method === 'hub/event') {
           const notification = params as unknown as HubEventNotification
-          const listeners = this.eventListeners.get(String(notification.sessionId))
+          const listeners = this.eventListeners.get(eventKey(notification.workspaceId, notification.sessionId))
           if (listeners) {
             for (const listener of listeners) {
               try { listener(notification) } catch { /* ignore */ }
@@ -195,12 +196,13 @@ export class RemoteSessionProvider {
 
   /**
    * Subscribe to events from a specific session.
+   * @param workspaceId - workspace that owns the session.
    * @param sessionId - session whose events should be delivered.
    * @param listener - callback invoked for each matching event notification.
    * @returns disposer that removes the listener.
    */
-  subscribe(sessionId: SessionId, listener: (notification: HubEventNotification) => void): () => void {
-    const key = String(sessionId)
+  subscribe(workspaceId: string, sessionId: SessionId, listener: (notification: HubEventNotification) => void): () => void {
+    const key = eventKey(workspaceId, sessionId)
     let listeners = this.eventListeners.get(key)
     if (!listeners) {
       listeners = new Set()
@@ -209,12 +211,12 @@ export class RemoteSessionProvider {
     const wasEmpty = listeners.size === 0
     listeners.add(listener)
     if (wasEmpty) {
-      void this.request('hub/subscribe', { id: sessionId })
+      void this.request('hub/subscribe', { id: sessionId, workspaceId })
     }
     return () => {
       const current = this.eventListeners.get(key)
       if (current?.delete(listener) && current.size === 0) {
-        void this.request('hub/unsubscribe', { id: sessionId })
+        void this.request('hub/unsubscribe', { id: sessionId, workspaceId })
       }
     }
   }
@@ -252,11 +254,11 @@ export class RemoteSessionProvider {
   }
 
   /** Restrict the host stream to workspaces selected by the Web client.
-   * @param workspaceIds - selected workspace identities.
+   * @param workspaces - selected endpoint workspace references.
    * @returns the remote subscription response.
    */
-  subscribeWorkspaces(workspaceIds: readonly string[]): Promise<unknown> {
-    return this.request('hub/subscribe-workspaces', { workspaceIds: [...workspaceIds] })
+  subscribeWorkspaces(workspaces: readonly HubWorkspaceRef[]): Promise<unknown> {
+    return this.request('hub/subscribe-workspaces', { workspaces: [...workspaces] })
   }
 
   /** Ensure the transport is available. */
@@ -267,6 +269,10 @@ export class RemoteSessionProvider {
     return this.transport
   }
 
+}
+
+function eventKey(workspaceId: string, sessionId: SessionId): string {
+  return `${workspaceId}\u0000${String(sessionId)}`
 }
 
 function validateHandshakeResult(value: unknown): HubHandshakeResult {
