@@ -469,12 +469,13 @@ export class WorkspaceRuntime implements IWorkspaces {
     switch (frame.type) {
       case 'host/archived-sessions-changed':
         if (notification.workspaceId === null) return
+        const workspaceId = notification.workspaceId
         this.manager.handleHostEnvelope({
           rpcId: 'remote-hub-host' as never,
           payload: {
             ...frame,
             archivedSessionIds: frame.archivedSessionIds.map(sessionId =>
-              qualifiedSessionId({ endpointId, workspaceId: notification.workspaceId, sessionId })),
+              qualifiedSessionId({ endpointId, workspaceId, sessionId })),
           },
         })
         return
