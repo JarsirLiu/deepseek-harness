@@ -67,13 +67,6 @@ Broker 对每个转发请求检查客户端身份、Endpoint、资源引用和 A
 
 客户端拥有端点注册表。每个远程条目包含配置的 URI、凭据引用、启用状态、连接状态，以及 Hub 握手返回的端点身份。
 
-```ts
-type SessionRef = {
-  endpointId: string
-  sessionId: SessionId
-}
-```
-
 所有会话、工作区、模型、子会话和事件操作都使用包含所属 `endpointId` 与资源 ID 的引用。裸会话 ID 或工作区 ID 不能作为跨端点键。工作区 ID、会话 ID 和子会话 ID 只在所属 Endpoint 内具有权威性。
 
 ```ts
@@ -84,7 +77,7 @@ type WorkspaceRef = {
 
 type SessionRef = {
   endpointId: string
-  sessionId: SessionId
+  sessionId: string
 }
 ```
 

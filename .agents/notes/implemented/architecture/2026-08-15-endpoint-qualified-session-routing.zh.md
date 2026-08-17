@@ -2,6 +2,8 @@
 
 Status: implemented
 
+[English](2026-08-15-endpoint-qualified-session-routing.md) | 中文
+
 ## Problem
 
 Web 客户端可以同时显示多个 Harness 主机提供的会话。单独的会话 ID 不能标识所属主机，因此后续传输可能把远程操作发送到本地 API 或错误的远程端点。

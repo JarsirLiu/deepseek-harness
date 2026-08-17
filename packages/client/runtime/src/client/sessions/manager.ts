@@ -221,7 +221,9 @@ export class SessionManager {
     this.openCatalogs.clear()
   }
 
-  /** Update the optional endpoint registry when the Hub plugin becomes available. */
+  /** Update the optional endpoint registry when the Hub plugin becomes available.
+   * @param registry - the registry used to resolve remote session transports.
+   */
   setRemoteRegistry(registry: RemoteSessionTransportRegistry | undefined): void {
     this.remoteRegistry = registry
     if (registry === undefined) return
@@ -402,7 +404,9 @@ export class SessionManager {
     })
   }
 
-  /** Install the selected remote workspace session summaries and transports. */
+  /** Install the selected remote workspace session summaries and transports.
+   * @param workspaces - workspace summaries selected for the Web Runtime.
+   */
   installRemoteWorkspaces(workspaces: readonly RemoteWorkspace[]): void {
     const next = new Set<SessionId>()
     for (const workspace of workspaces) {

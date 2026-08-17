@@ -53,12 +53,21 @@ const GROUPS = [{
   ],
 }]
 
+type ModelConnection = {
+  api: {
+    sessions: {
+      models(payload: { sessionId: SessionId }): Promise<unknown>
+      selectModel(payload: { sessionId: SessionId; provider: string; model: string; reasoningEffort?: string }): Promise<unknown>
+    }
+  }
+}
+
 /** Boot the plugin over fake faces + a stateful fake host (current moves on selectModel). */
 async function bench() {
   const ctx = new Context()
   let current: ModelSelection = { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
   const calls = { models: 0, select: 0 }
-  ctx.provide('connection', { api: { sessions: {
+  const connection: ModelConnection = { api: { sessions: {
     models: () => {
       calls.models += 1
       return Promise.resolve({
@@ -76,7 +85,8 @@ async function bench() {
       }
       return Promise.resolve({ result: { ok: true as const, value: { selected: current } } })
     },
-  } } })
+  } } }
+  ctx.provide('connection', connection)
   // Whether the Host reports an adapter for the current route; the composer
   // block follows this, never catalog membership.
   let routable = true
@@ -108,8 +118,8 @@ async function bench() {
   const scopes = new Map<SessionId, Context>()
   const addressed = new Set<SessionId>()
   const sessionFace = {
-    models: () => ctx.get('connection').api.sessions.models({ sessionId: sid('s1') }),
-    selectModel: (selection: ModelSelection) => ctx.get('connection').api.sessions.selectModel({ sessionId: sid('s1'), ...selection }),
+    models: () => connection.api.sessions.models({ sessionId: sid('s1') }),
+    selectModel: (selection: ModelSelection) => connection.api.sessions.selectModel({ sessionId: sid('s1'), ...selection }),
   }
   ctx.provide('sessions', {
     scope: (id: SessionId) => scopes.get(id),

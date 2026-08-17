@@ -1,9 +1,15 @@
 import type { HostFrame } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 
+/** Host workspace metadata used to filter endpoint event frames. */
 export type WorkspaceSubscriptionEntry = { id: string; path?: string; sessionIds: SessionId[] }
 
-/** Decide whether one Host frame belongs to the workspaces selected by a client. */
+/** Decide whether one Host frame belongs to the workspaces selected by a client.
+ * @param frame - the Host event frame to inspect.
+ * @param workspaceIds - workspace identities selected by the client.
+ * @param workspaces - current Host workspace metadata.
+ * @returns whether the frame is visible to the selected workspaces.
+ */
 export function isHostFrameVisibleToWorkspaces(
   frame: HostFrame,
   workspaceIds: ReadonlySet<string>,

@@ -51,15 +51,12 @@ const STATUS_DOT_CLASS: Record<HubStatusResponse['status'], string> = {
   error: `${css.dot as string} ${css.error as string}`,
 }
 
-const NOOP_RECONNECT = async (): Promise<void> => {}
-const EMPTY_WORKSPACES = async (): Promise<HubWorkspaceListResult> => ({ endpointId: 'remote:unavailable', workspaces: [] })
-
 /**
  * Render the remote hub settings section.
  * @param props - section owner props and localized copy.
  * @returns the section element tree.
  */
-export function HubSection({ t, loadStatus, loadWorkspaces = EMPTY_WORKSPACES, reconnect = NOOP_RECONNECT }: HubSectionProps): ReactNode {
+export function HubSection({ t, loadStatus, loadWorkspaces, reconnect }: HubSectionProps): ReactNode {
   const [state, setState] = useState<ViewState>({ kind: 'loading' })
   const [workspaces, setWorkspaces] = useState<HubWorkspaceEntry[]>([])
   const [selectedIds, setSelectedIds] = useState<string[]>(() => readSelectedWorkspaceIds())

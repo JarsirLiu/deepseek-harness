@@ -16,6 +16,7 @@ export type { SessionEndpointId, SessionKey, SessionRef } from './endpoint-regis
 type SubagentPromptReceipt = { messageId: MessageId }
 type SubagentInterruptReceipt = { accepted: true }
 
+/** Cordis service key for the remote session transport registry. */
 export const REMOTE_SESSION_REGISTRY = 'remoteSessionTransportRegistry'
 
 /** One remote workspace selected for projection into the Web Runtime. */
@@ -59,7 +60,11 @@ export const REMOTE_WORKSPACE_SOURCE = 'remoteWorkspaceSource'
 /** A remote stream frame with its publishing endpoint retained outside the Harness wire frame. */
 export type RemoteSessionFrame = MuxFrame & { readonly endpointId: `remote:${string}` }
 
-/** Resolve a remote transport without permitting a local fallback. */
+/** Resolve a remote transport without permitting a local fallback.
+ * @param transport - the candidate remote transport.
+ * @param ref - the endpoint-qualified session reference.
+ * @returns the owning transport, or undefined for a local reference.
+ */
 export function resolveRemoteSessionTransport(
   transport: RemoteSessionTransport | undefined,
   ref: SessionRef,
@@ -71,6 +76,7 @@ export function resolveRemoteSessionTransport(
   return transport
 }
 
+/** Operations supplied by one remote endpoint transport. */
 export interface RemoteSessionTransport {
   readonly endpointId: `remote:${string}`
   owns(ref: SessionRef): boolean
@@ -109,9 +115,12 @@ export interface RemoteSessionTransport {
 export class RemoteSessionTransportRegistry {
   private readonly transports = new Map<`remote:${string}`, RemoteSessionTransport>()
 
-  /** Register one endpoint and return its disposer. */
+  /** Register one endpoint and return its disposer.
+   * @param transport - the endpoint transport to register.
+   * @returns a disposer that removes this registration.
+   */
   register(transport: RemoteSessionTransport): () => void {
-    const endpointId = transport.endpointId as `remote:${string}`
+    const endpointId = transport.endpointId
     if (this.transports.has(endpointId)) {
       throw new Error(`remote endpoint already registered: ${endpointId}`)
     }
@@ -121,7 +130,10 @@ export class RemoteSessionTransportRegistry {
     }
   }
 
-  /** Resolve the transport that owns one remote session. */
+  /** Resolve the transport that owns one remote session.
+   * @param ref - the endpoint-qualified session reference.
+   * @returns the owning transport.
+   */
   resolve(ref: SessionRef): RemoteSessionTransport {
     if (!ref.endpointId.startsWith('remote:')) {
       throw new Error(`local session cannot use a remote transport: ${String(ref.sessionId)}`)
@@ -134,12 +146,17 @@ export class RemoteSessionTransportRegistry {
     return transport
   }
 
-  /** Return all currently registered endpoint identities. */
+  /** Return all currently registered endpoint identities.
+   * @returns the registered remote endpoint identities.
+   */
   endpoints(): readonly `remote:${string}`[] {
     return [...this.transports.keys()]
   }
 
-  /** Resolve a registered endpoint before a session exists. */
+  /** Resolve a registered endpoint before a session exists.
+   * @param endpointId - the remote endpoint identity.
+   * @returns the registered transport, if present.
+   */
   get(endpointId: `remote:${string}`): RemoteSessionTransport | undefined {
     return this.transports.get(endpointId)
   }
@@ -162,7 +179,10 @@ async function call<T>(method: string, params: Record<string, unknown>): Promise
   return { ok: false, error: { code: 'internal', message: 'Hub API response is missing result', details: {} } }
 }
 
-/** Create the Web transport for one configured Hub endpoint. */
+/** Create the Web transport for one configured Hub endpoint.
+ * @param endpointId - the endpoint identity or a resolver for it.
+ * @returns the endpoint's Web transport.
+ */
 export function createRemoteSessionTransport(endpointId: SessionEndpointId | (() => SessionEndpointId)): RemoteSessionTransport {
   const resolveEndpoint = typeof endpointId === 'function' ? endpointId : () => endpointId
   if (!resolveEndpoint().startsWith('remote:')) throw new Error(`Hub Web adapter requires a remote endpoint: ${resolveEndpoint()}`)
@@ -177,7 +197,7 @@ export function createRemoteSessionTransport(endpointId: SessionEndpointId | (()
     if (eventSource !== undefined) return
     eventSource = new EventSource('/api/hub/events.mux')
     eventSource.onmessage = (event) => {
-      const notification = JSON.parse(event.data) as { endpointId: `remote:${string}`; event: Record<string, unknown>; sessionId: SessionId }
+      const notification = parseEventData(event.data) as { endpointId: `remote:${string}`; event: Record<string, unknown>; sessionId: SessionId }
       const listeners = eventListeners.get(String(notification.sessionId))
       if (listeners === undefined) return
       const frame = { type: 'session/event', sessionId: notification.sessionId, event: notification.event as never, endpointId: notification.endpointId } as RemoteSessionFrame
@@ -235,12 +255,17 @@ export function createRemoteSessionTransport(endpointId: SessionEndpointId | (()
     subscribeHost: (listener) => {
       const source = new EventSource('/api/hub/host/stream')
       source.onmessage = (event) => {
-        const notification = JSON.parse(event.data) as { frame: HostFrame }
+        const notification = parseEventData(event.data) as { frame: HostFrame }
         listener(notification.frame)
       }
-      return () => source.close()
+      return () => { source.close() }
     },
   }
+}
+
+function parseEventData(data: unknown): unknown {
+  if (typeof data !== 'string') throw new Error('Hub event data must be JSON text')
+  return JSON.parse(data)
 }
 
 type RemoteHistoryResponse = {

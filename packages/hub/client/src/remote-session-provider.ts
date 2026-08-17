@@ -62,7 +62,11 @@ export class RemoteSessionProvider {
   >()
   private readonly hostListeners = new Set<(notification: HubHostNotification) => void>()
 
-  /** Request access for the provider-owned command client. */
+  /** Request access for the provider-owned command client.
+   * @param method - the remote method name.
+   * @param params - the method parameters.
+   * @returns the provider response.
+   */
   request(method: string, params: object): Promise<unknown> {
     return this.ensureConnected().request(method, params)
   }
@@ -214,7 +218,10 @@ export class RemoteSessionProvider {
     }
   }
 
-  /** Subscribe to every remote session event for a host API event bridge. */
+  /** Subscribe to every remote session event for a host API event bridge.
+   * @param listener - callback invoked for each event notification.
+   * @returns a disposer for the subscription.
+   */
   onEvent(listener: (notification: HubEventNotification) => void): () => void {
     const listeners = this.eventListeners.get('*') ?? new Set()
     this.eventListeners.set('*', listeners)
@@ -225,19 +232,28 @@ export class RemoteSessionProvider {
     }
   }
 
-  /** Subscribe to connection and session status notifications. */
+  /** Subscribe to connection and session status notifications.
+   * @param listener - callback invoked for each status notification.
+   * @returns a disposer for the subscription.
+   */
   onStatus(listener: (notification: HubStatusNotification) => void): () => void {
     this.statusListeners.add(listener)
     return () => { this.statusListeners.delete(listener) }
   }
 
-  /** Subscribe to unchanged frames from the remote api.events.host stream. */
+  /** Subscribe to unchanged frames from the remote api.events.host stream.
+   * @param listener - callback invoked for each Host notification.
+   * @returns a disposer for the subscription.
+   */
   onHostFrame(listener: (notification: HubHostNotification) => void): () => void {
     this.hostListeners.add(listener)
     return () => { this.hostListeners.delete(listener) }
   }
 
-  /** Restrict the host stream to workspaces selected by the Web client. */
+  /** Restrict the host stream to workspaces selected by the Web client.
+   * @param workspaceIds - selected workspace identities.
+   * @returns the remote subscription response.
+   */
   subscribeWorkspaces(workspaceIds: readonly string[]): Promise<unknown> {
     return this.request('hub/subscribe-workspaces', { workspaceIds: [...workspaceIds] })
   }

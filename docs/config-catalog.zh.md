@@ -803,6 +803,58 @@ export interface Config {
 
 来源：[`packages/host/webserver/src/index.ts:45`](../packages/host/webserver/src/index.ts)
 
+<a id="deepseek-aidsh-hub-client"></a>
+
+## `@deepseek-ai/dsh-hub-client`
+
+需要：`sessions` · `webServer`
+
+```ts config-catalog
+/** Configuration for a remote hub connection. */
+export interface HubClientConfig {
+  /** Stable endpoint identity used to qualify remote sessions. */
+  endpointId?: `remote:${string}`
+  /** WebSocket URI of the remote hub server, e.g. ws://192.168.1.100:8765/hub */
+  uri: string
+  /** Optional authentication token. */
+  token?: string
+  /** Auto-connect on plugin load. */
+  autoConnect?: boolean
+  /** Delay between failed automatic connection attempts, in milliseconds. */
+  reconnectDelay?: number
+}
+```
+
+来源：[`packages/hub/client/src/index.ts:19`](../packages/hub/client/src/index.ts)
+
+<a id="deepseek-aidsh-hub-server"></a>
+
+## `@deepseek-ai/dsh-hub-server`
+
+需要：`sessions`
+
+```ts config-catalog
+/**
+ * Hub server configuration.
+ */
+export interface HubServerConfig {
+  /** Stable identity exposed to clients for this Hub endpoint. */
+  endpointId?: `remote:${string}`
+  /** TCP port to listen on. Defaults to 8765. */
+  port?: number
+  /** Host to bind to. Defaults to '0.0.0.0'. */
+  host?: string
+  /** Optional set of authentication tokens. */
+  authTokens?: string[]
+  /** Server identity name. */
+  serverName?: string
+  /** Remote preset selected for each published workspace, keyed by workspace id. */
+  workspacePresets?: Record<string, string>
+}
+```
+
+来源：[`packages/hub/server/src/server.ts:39`](../packages/hub/server/src/server.ts)
+
 <a id="deepseek-aidsh-invariants"></a>
 
 ## `@deepseek-ai/dsh-invariants`
@@ -3041,6 +3093,7 @@ export interface Config {
 - `@deepseek-ai/dsh-client-ui-directory-picker-browse`（[`packages/client/ui-directory-picker-browse/src/index.ts`](../packages/client/ui-directory-picker-browse/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-directory-picker-native`（[`packages/client/ui-directory-picker-native/src/index.ts`](../packages/client/ui-directory-picker-native/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-goal`（[`packages/client/ui-goal/src/index.ts`](../packages/client/ui-goal/src/index.ts)）
+- `@deepseek-ai/dsh-client-ui-hub`（[`packages/client/ui-hub/src/index.ts`](../packages/client/ui-hub/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-input-trigger`（[`packages/client/ui-input-trigger/src/index.ts`](../packages/client/ui-input-trigger/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-jobs`（[`packages/client/ui-jobs/src/index.ts`](../packages/client/ui-jobs/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-layout`（[`packages/client/ui-layout/src/index.ts`](../packages/client/ui-layout/src/index.ts)）
@@ -3133,6 +3186,8 @@ export interface Config {
 - `@deepseek-ai/dsh-cmdline`（[`packages/boot/cmdline/src/index.ts`](../packages/boot/cmdline/src/index.ts)）
 - `@deepseek-ai/dsh-home-paths`（[`packages/util/home-paths/src/index.ts`](../packages/util/home-paths/src/index.ts)）
 - `@deepseek-ai/dsh-hook-protocol`（[`packages/hooks/hook-protocol/src/index.ts`](../packages/hooks/hook-protocol/src/index.ts)）
+- `@deepseek-ai/dsh-hub-protocol`（[`packages/hub/protocol/src/index.ts`](../packages/hub/protocol/src/index.ts)）
+- `@deepseek-ai/dsh-hub-web-adapter`（[`packages/hub/web-adapter/src/index.ts`](../packages/hub/web-adapter/src/index.ts)）
 - `@deepseek-ai/dsh-launch-environment`（[`packages/util/launch-environment/src/index.ts`](../packages/util/launch-environment/src/index.ts)）
 - `@deepseek-ai/dsh-llm-mock-server`（[`packages/test-support/llm-mock-server/src/index.ts`](../packages/test-support/llm-mock-server/src/index.ts)）
 - `@deepseek-ai/dsh-loader-smoke`（[`packages/test-support/loader-smoke/src/index.ts`](../packages/test-support/loader-smoke/src/index.ts)）

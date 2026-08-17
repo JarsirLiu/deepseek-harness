@@ -37,7 +37,11 @@ export interface SessionTransport {
   subagentInterrupt(address: Extract<SubagentAddress, { mode: 'continuable' }>): Promise<RpcResponse<{ accepted: true }>>
 }
 
-/** Build the local transport from the official Host API. */
+/** Build the local transport from the official Host API.
+ * @param api - the Host API client.
+ * @param sessionId - the session owned by the transport.
+ * @returns the local session transport.
+ */
 export function localSessionTransport(api: IApiClient, sessionId: SessionId): SessionTransport {
   return {
     history: payload => api.sessions.history({ sessionId, ...payload }),
@@ -58,7 +62,11 @@ export function localSessionTransport(api: IApiClient, sessionId: SessionId): Se
   }
 }
 
-/** Adapt one endpoint-owned Hub transport to the Runtime Session interface. */
+/** Adapt one endpoint-owned Hub transport to the Runtime Session interface.
+ * @param transport - the Hub transport for the owning endpoint.
+ * @param ref - the endpoint-qualified session reference.
+ * @returns the Runtime session transport.
+ */
 export function remoteSessionTransport(transport: RemoteSessionTransport, ref: SessionRef): SessionTransport {
   if (!transport.owns(ref)) throw new Error(`remote transport does not own session ${String(ref.sessionId)}`)
   const id = ref.sessionId

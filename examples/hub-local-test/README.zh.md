@@ -1,5 +1,7 @@
 # Hub 双进程本地测试
 
+[English](README.md) | 中文
+
 这个目录用于模拟两台设备：远程端运行 `remote-server.yml`，本地端运行 `local-client.yml`。两个进程使用不同的 Web 端口，但通过 `8765/hub` 建立真实 WebSocket 连接。
 
 当前仓库源码不能直接通过 `dsh plugin add file:...` 安装到默认 Web profile。默认 profile 位于用户目录下的独立 pnpm workspace，而 Hub 包依赖仓库内的 `workspace:^` 包；在插件发布或提供仓库内开发 profile 前，执行该安装命令会失败。

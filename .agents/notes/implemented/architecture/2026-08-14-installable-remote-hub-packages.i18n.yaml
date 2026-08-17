@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-14-installable-remote-hub-packages.md
-2026-08-14-installable-remote-hub-packages.md: 50a8d5358cb9d2d6fe4c9bbab550f901504f89de
-2026-08-14-installable-remote-hub-packages.zh.md: 49c80653978d649d7f55fdfd7498b58978f5c6b0
+2026-08-14-installable-remote-hub-packages.md: 86ee03a8ad948779ce3189adf969beecbfcb2a9b
+2026-08-14-installable-remote-hub-packages.zh.md: 7257a2d1179f2a8cdf57a315d92cb2b59e5a0da3

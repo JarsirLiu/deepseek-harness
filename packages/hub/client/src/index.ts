@@ -62,23 +62,23 @@ export function apply(ctx: Context, config: HubClientConfig): void {
     const rpcDispose = webServer.register({
       kind: 'exact',
       path: '/api/hub/rpc',
-      handler: async (req: unknown, res: unknown) => {
+      handler: (req: unknown, res: unknown) => {
         const request = req as { on: (event: string, listener: (chunk: Buffer) => void) => void }
         const response = res as { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void }
         const chunks: Buffer[] = []
         request.on('data', chunk => chunks.push(chunk))
-        request.on('end', async () => {
+        request.on('end', () => { void (async () => {
           try {
             const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { method?: string; params?: Record<string, unknown> }
             if (typeof body.method !== 'string') throw new Error('method is required')
-            const result = await provider.request(body.method as never, body.params ?? {})
+            const result = await provider.request(body.method, body.params ?? {})
             response.writeHead(200, { 'Content-Type': 'application/json' })
             response.end(JSON.stringify(result))
           } catch (error) {
             response.writeHead(400, { 'Content-Type': 'application/json' })
             response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
           }
-        })
+        })() })
       },
     })
     ctx.effect(() => rpcDispose, 'hub-client.webServer.rpc')
@@ -103,7 +103,7 @@ export function apply(ctx: Context, config: HubClientConfig): void {
     const reconnectDispose = webServer.register({
       kind: 'exact',
       path: '/api/hub/reconnect',
-      handler: async (_req: unknown, res: unknown) => {
+      handler: (_req: unknown, res: unknown) => { void (async () => {
         const response = res as { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void }
         try {
           provider.disconnect()
@@ -114,7 +114,7 @@ export function apply(ctx: Context, config: HubClientConfig): void {
           response.writeHead(502, { 'Content-Type': 'application/json' })
           response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
         }
-      },
+      })() },
     })
     ctx.effect(() => reconnectDispose, 'hub-client.webServer.reconnect')
     const configDispose = webServer.register({
@@ -148,7 +148,7 @@ export function apply(ctx: Context, config: HubClientConfig): void {
         })
         response.write(': connected\n\n')
         const unsubscribe = id === null || id === undefined
-          ? provider.onEvent(notification => response.write(`data: ${JSON.stringify(notification)}\n\n`))
+          ? provider.onEvent((notification) => { response.write(`data: ${JSON.stringify(notification)}\n\n`) })
           : provider.subscribe(id as import('@deepseek-ai/dsh-session').SessionId, (notification) => {
             response.write(`data: ${JSON.stringify(notification)}\n\n`)
           })
@@ -171,7 +171,7 @@ export function apply(ctx: Context, config: HubClientConfig): void {
         }
         response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
         response.write(': connected\n\n')
-        const unsubscribe = provider.onHostFrame(notification => response.write(`data: ${JSON.stringify(notification)}\n\n`))
+        const unsubscribe = provider.onHostFrame((notification) => { response.write(`data: ${JSON.stringify(notification)}\n\n`) })
         response.on?.('close', () => { unsubscribe(); response.end() })
       },
     })

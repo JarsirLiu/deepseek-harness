@@ -2,6 +2,8 @@
 
 Status: implemented
 
+English | [中文](2026-08-15-endpoint-qualified-session-routing.zh.md)
+
 ## Problem
 
 The web client can display sessions supplied by more than one Harness host. A bare session id does not identify the owning host, so a later transport lookup can send a remote operation to the local API or to the wrong remote endpoint.

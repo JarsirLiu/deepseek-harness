@@ -30,8 +30,5 @@
 
 ## 已知限制与后续工作
 
-- **Web 路由由部署负责** —— `RemoteAgentClient` 提供远程执行接口；Host API 必须为配置为远程执行的会话选择它。
-
-## 已知限制与后续工作
-
 - **UI 为可选项**：只安装 client provider 仍可提供远程会话，但不会出现设置区。
+- **Web 路由由部署负责** —— `RemoteAgentClient` 提供远程执行接口；Host API 必须为配置为远程执行的会话选择它。

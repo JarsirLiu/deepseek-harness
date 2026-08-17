@@ -67,13 +67,6 @@ The Broker checks the client identity, Endpoint, resource reference, and API met
 
 The client owns an endpoint registry. Each remote entry contains its configured URI, credential reference, enabled state, connection status, and the endpoint identity returned by the Hub handshake.
 
-```ts
-type SessionRef = {
-  endpointId: string
-  sessionId: SessionId
-}
-```
-
 All session, workspace, model, subagent, and event operations use a reference containing the owning `endpointId` and the resource ID. A bare session ID or workspace ID is not a cross-endpoint key. Workspace IDs, session IDs, and subagent IDs are authoritative only within their owning Endpoint.
 
 ```ts
@@ -84,7 +77,7 @@ type WorkspaceRef = {
 
 type SessionRef = {
   endpointId: string
-  sessionId: SessionId
+  sessionId: string
 }
 ```
 

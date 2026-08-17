@@ -2,6 +2,16 @@ import { describe, expect, it, vi } from 'vitest'
 import type { SessionId } from '@deepseek-ai/dsh-api-remotes/client'
 import { createRemoteSessionTransport, parseQualifiedSessionId, qualifiedSessionId, RemoteSessionTransportRegistry, resolveRemoteSessionTransport, SessionEndpointRegistry, sessionKey } from '../src/index.ts'
 
+type HubRequest = {
+  method: string
+  params: { method: string; payload?: unknown }
+}
+
+function requestBody(init: RequestInit | undefined): HubRequest {
+  if (typeof init?.body !== 'string') throw new Error('expected a serialized Hub request')
+  return JSON.parse(init.body) as HubRequest
+}
+
 describe('Hub Web adapter endpoint ownership', () => {
   it('encodes and parses endpoint-qualified session references', () => {
     const ref = { endpointId: 'remote:first' as const, sessionId: 'same-session' as SessionId }
@@ -107,7 +117,7 @@ describe('Hub Web adapter endpoint ownership', () => {
       })
       expect(fetch.mock.calls[0]?.[0]).toBe('/api/hub/rpc')
       expect(fetch.mock.calls[0]?.[1]).toMatchObject({ method: 'POST' })
-      expect(JSON.parse(String((fetch.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
+      expect(requestBody(fetch.mock.calls[0]?.[1] as RequestInit)).toEqual({
         method: 'hub/api/request',
         params: { method: 'session.history', payload: { sessionId: 'session-1', maxMessages: 5 } },
       })
@@ -223,7 +233,7 @@ describe('Hub Web adapter endpoint ownership', () => {
       await transport.subagentHistory(address, { maxMessages: 4 })
       await transport.subagentPrompt(address, [{ type: 'text', text: 'hello' }])
       await transport.subagentInterrupt(address)
-      const methods = fetch.mock.calls.map(call => JSON.parse(String((call[1] as RequestInit).body)).params.method)
+      const methods = fetch.mock.calls.map(call => requestBody(call[1] as RequestInit).params.method)
       expect(methods).toEqual([
         'session.attachment', 'workspace.archiveSession', 'subagent.history',
         'subagent.prompt', 'subagent.interrupt',
@@ -285,7 +295,7 @@ describe('Hub Web adapter endpoint ownership', () => {
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     try {
       await createRemoteSessionTransport('remote:first').fork('session-1' as SessionId)
-      expect(JSON.parse(String((fetch.mock.calls[0]?.[1] as RequestInit).body)).params.payload)
+      expect(requestBody(fetch.mock.calls[0]?.[1] as RequestInit).params.payload)
         .toEqual({ sessionId: 'session-1' })
     } finally {
       fetch.mockRestore()

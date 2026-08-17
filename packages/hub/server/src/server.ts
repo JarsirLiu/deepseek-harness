@@ -186,7 +186,7 @@ export class HubServer {
       case 'hub/list':
         return this.handleList()
       case 'hub/workspaces':
-        return await this.handleWorkspaces(params as { workspaceIds?: string[] })
+        return await this.handleWorkspaces(params)
       case 'hub/api/request':
         return await this.handleApiRequest(params as { method: string; payload: Record<string, unknown> })
       case 'hub/subscribe':
@@ -194,7 +194,7 @@ export class HubServer {
       case 'hub/unsubscribe':
         return this.handleUnsubscribe(client, params)
       case 'hub/subscribe-workspaces':
-        return this.handleWorkspaceSubscription(client, params as { workspaceIds?: string[] })
+        return this.handleWorkspaceSubscription(client, params)
       default:
         throw new Error(`unknown hub method: ${method}`)
     }

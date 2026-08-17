@@ -8,6 +8,7 @@
 
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type { HubStatusResponse, HubWorkspaceListResult } from '@deepseek-ai/dsh-hub-protocol'
+import type { RpcResult, SessionId } from '@deepseek-ai/dsh-api-remotes/client'
 import { createRemoteSessionTransport, REMOTE_SESSION_REGISTRY, REMOTE_WORKSPACE_SOURCE, RemoteSessionTransportRegistry, type RemoteWorkspace, type RemoteWorkspaceSource } from '@deepseek-ai/dsh-hub-web-adapter'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -85,14 +86,14 @@ export function apply(ctx: ClientContext): void {
         }))
     },
     createSession: async (workspace) => {
-      const result = await rpc<{ result: { ok: true; value: { sessionId: string } } }>('hub/api/request', {
+      const result = await rpc<{ result: RpcResult<{ sessionId: SessionId }> }>('hub/api/request', {
         method: 'session.create', payload: { workspaceId: workspace.workspaceId },
       })
       if (!result.result.ok) throw new Error('remote session creation failed')
-      return result.result.value.sessionId as never
+      return result.result.value.sessionId
     },
     rename: async (workspace, title) => {
-      const result = await rpc<{ result: { ok: true; value: RemoteWorkspace } }>('hub/api/request', {
+      const result = await rpc<{ result: RpcResult<RemoteWorkspace> }>('hub/api/request', {
         method: 'workspace.rename', payload: { workspaceId: workspace.workspaceId, title },
       })
       if (!result.result.ok) throw new Error('remote workspace rename failed')
@@ -105,7 +106,7 @@ export function apply(ctx: ClientContext): void {
       await rpc('hub/api/request', { method: 'workspace.insertBefore', payload: { workspaceId: workspace.workspaceId, ...(before === undefined ? {} : { beforeWorkspaceId: before.workspaceId }) } })
     },
     insertSessionBefore: async (workspace, sessionId, beforeSessionId) => {
-      const result = await rpc<{ result: { ok: true; value: RemoteWorkspace } }>('hub/api/request', { method: 'workspace.insertSessionBefore', payload: { workspaceId: workspace.workspaceId, sessionId, ...(beforeSessionId === undefined ? {} : { beforeSessionId }) } })
+      const result = await rpc<{ result: RpcResult<RemoteWorkspace> }>('hub/api/request', { method: 'workspace.insertSessionBefore', payload: { workspaceId: workspace.workspaceId, sessionId, ...(beforeSessionId === undefined ? {} : { beforeSessionId }) } })
       if (!result.result.ok) throw new Error('remote session reorder failed')
       return { ...workspace, ...result.result.value }
     },
@@ -113,7 +114,7 @@ export function apply(ctx: ClientContext): void {
   ctx.provide(REMOTE_SESSION_REGISTRY, transportRegistry)
   ctx.effect(() => {
     bindTransport()
-    return () => disposeTransport()
+    return () => { disposeTransport() }
   }, 'ui-hub: remote endpoint transport')
   ctx.provide(REMOTE_WORKSPACE_SOURCE, remoteWorkspaceSource)
 

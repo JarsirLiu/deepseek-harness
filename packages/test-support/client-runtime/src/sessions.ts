@@ -424,7 +424,9 @@ export class TestSessions implements ISessions {
     })
   }
 
-  /** Add a remote session summary for tests that exercise remote navigation. */
+  /** Add a remote session summary for tests that exercise remote navigation.
+   * @param summary - the remote session summary to expose.
+   */
   adoptRemote(summary: import('@deepseek-ai/dsh-api-remotes/client').SessionSummary): void {
     this.calls.push({ method: 'open', args: [summary.sessionId] })
   }

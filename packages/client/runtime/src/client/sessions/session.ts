@@ -176,7 +176,9 @@ export class Session implements SessionFace {
     return this.transport.selectModel(selection)
   }
 
-  /** Replace the endpoint transport when workspace discovery finishes. */
+  /** Replace the endpoint transport when workspace discovery finishes.
+   * @param transport - the transport that owns this session.
+   */
   installTransport(transport: SessionTransport): void {
     this.transport = transport
   }

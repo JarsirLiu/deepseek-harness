@@ -84,7 +84,7 @@ export class WorkspaceRuntime implements IWorkspaces {
       if (typeof globalThis.addEventListener !== 'function' || typeof globalThis.removeEventListener !== 'function') return () => {}
       const refresh = (): void => { void this.refreshRemote() }
       globalThis.addEventListener('dsh:remote-workspaces-changed', refresh)
-      return () => globalThis.removeEventListener('dsh:remote-workspaces-changed', refresh)
+      return () => { globalThis.removeEventListener('dsh:remote-workspaces-changed', refresh) }
     }, 'workspaces: refresh selected remote workspaces')
     if (this.getRemoteSource() !== undefined) void this.refreshRemote()
     ctx.reflect.provide('workspaces', this, undefined)
