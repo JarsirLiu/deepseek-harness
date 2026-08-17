@@ -89,20 +89,20 @@ export function apply(ctx: ClientContext): void {
         }))
     },
     createSession: async (workspace) => {
-      const result = await rpc<{ result: RpcResult<{ sessionId: SessionId }> }>('hub/api/request', {
+      const result = await rpc<RpcResult<{ sessionId: SessionId }>>('hub/api/request', {
         endpointId: workspace.endpointId, workspaceId: workspace.workspaceId,
         method: 'session.create', payload: { workspaceId: workspace.workspaceId },
       })
-      if (!result.result.ok) throw new Error('remote session creation failed')
-      return result.result.value.sessionId
+      if (!result.ok) throw new Error('remote session creation failed')
+      return result.value.sessionId
     },
     rename: async (workspace, title) => {
-      const result = await rpc<{ result: RpcResult<RemoteWorkspace> }>('hub/api/request', {
+      const result = await rpc<RpcResult<RemoteWorkspace>>('hub/api/request', {
         endpointId: workspace.endpointId, workspaceId: workspace.workspaceId,
         method: 'workspace.rename', payload: { workspaceId: workspace.workspaceId, title },
       })
-      if (!result.result.ok) throw new Error('remote workspace rename failed')
-      return { ...workspace, ...result.result.value }
+      if (!result.ok) throw new Error('remote workspace rename failed')
+      return { ...workspace, ...result.value }
     },
     delete: async (workspace) => {
       await rpc('hub/api/request', { endpointId: workspace.endpointId, workspaceId: workspace.workspaceId, method: 'workspace.delete', payload: { workspaceId: workspace.workspaceId } })
@@ -111,9 +111,9 @@ export function apply(ctx: ClientContext): void {
       await rpc('hub/api/request', { endpointId: workspace.endpointId, workspaceId: workspace.workspaceId, method: 'workspace.insertBefore', payload: { workspaceId: workspace.workspaceId, ...(before === undefined ? {} : { beforeWorkspaceId: before.workspaceId }) } })
     },
     insertSessionBefore: async (workspace, sessionId, beforeSessionId) => {
-      const result = await rpc<{ result: RpcResult<RemoteWorkspace> }>('hub/api/request', { endpointId: workspace.endpointId, workspaceId: workspace.workspaceId, method: 'workspace.insertSessionBefore', payload: { workspaceId: workspace.workspaceId, sessionId, ...(beforeSessionId === undefined ? {} : { beforeSessionId }) } })
-      if (!result.result.ok) throw new Error('remote session reorder failed')
-      return { ...workspace, ...result.result.value }
+      const result = await rpc<RpcResult<RemoteWorkspace>>('hub/api/request', { endpointId: workspace.endpointId, workspaceId: workspace.workspaceId, method: 'workspace.insertSessionBefore', payload: { workspaceId: workspace.workspaceId, sessionId, ...(beforeSessionId === undefined ? {} : { beforeSessionId }) } })
+      if (!result.ok) throw new Error('remote session reorder failed')
+      return { ...workspace, ...result.value }
     },
   }
   ctx.provide(REMOTE_SESSION_REGISTRY, transportRegistry)

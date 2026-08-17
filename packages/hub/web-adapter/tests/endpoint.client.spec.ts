@@ -78,11 +78,11 @@ describe('Hub Web adapter endpoint ownership', () => {
 
   it('preserves the official history view and projection baseline', async () => {
     const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
-      result: { ok: true, value: {
+      ok: true, value: {
         events: [{ event: { seq: 1, type: 'tool/result', data: {} }, view: { for: 'tool', card: 'chart' } }],
         hasMore: true,
         projections: { asOfSeq: 1, values: { permissions: { currentValue: 'workspace-write', options: [] } } },
-      } },
+      },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     try {
       const result = await createRemoteSessionTransport('remote:first').history('workspace-a', 'session-1' as SessionId, { maxMessages: 5 })
@@ -107,7 +107,7 @@ describe('Hub Web adapter endpoint ownership', () => {
 
   it('preserves history without inventing an empty projection block', async () => {
     const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
-      result: { ok: true, value: { events: [], hasMore: false } },
+      ok: true, value: { events: [], hasMore: false },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     try {
       await expect(createRemoteSessionTransport('remote:first').history('workspace-a', 'session-1' as SessionId, {}))
@@ -135,7 +135,7 @@ describe('Hub Web adapter endpoint ownership', () => {
       failures: [],
     }
     const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
-      result: { ok: true, value: catalog },
+      ok: true, value: catalog,
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     try {
       await expect(createRemoteSessionTransport('remote:first').models('workspace-a', 'session-1' as SessionId))
@@ -148,7 +148,7 @@ describe('Hub Web adapter endpoint ownership', () => {
   it('returns the official model selection result without the Hub response wrapper', async () => {
     const selected = { provider: 'remote-provider', model: 'remote-model', reasoningEffort: 'high' }
     const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
-      result: { ok: true, value: { selected } },
+      ok: true, value: { selected },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     try {
       await expect(createRemoteSessionTransport('remote:first').selectModel('workspace-a', 'session-1' as SessionId, selected))
@@ -165,7 +165,7 @@ describe('Hub Web adapter endpoint ownership', () => {
     }))
     try {
       await expect(createRemoteSessionTransport('remote:first').models('workspace-a', 'session-1' as SessionId))
-        .resolves.toMatchObject({ ok: false, error: { code: 'internal', message: 'Hub API response is missing result' } })
+        .resolves.toMatchObject({ ok: false, error: { code: 'internal', message: 'Hub API response is not an RpcResult' } })
     } finally {
       fetch.mockRestore()
     }
@@ -180,7 +180,7 @@ describe('Hub Web adapter endpoint ownership', () => {
     ['subagentList', (transport: ReturnType<typeof createRemoteSessionTransport>) => transport.subagentList('workspace-a', 'session-1' as SessionId)],
   ])('unwraps the official RpcResult for %s', async (_name, invoke) => {
     const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({
-      result: { ok: true, value: { accepted: true } },
+      ok: true, value: { accepted: true },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     try {
       await expect(invoke(createRemoteSessionTransport('remote:first')))
@@ -202,7 +202,7 @@ describe('Hub Web adapter endpoint ownership', () => {
 
   it('forwards every session and subagent operation through the same API method', async () => {
     const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({
-      result: { ok: true, value: { accepted: true } },
+      ok: true, value: { accepted: true },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     const transport = createRemoteSessionTransport('remote:first')
     const address = { parentSessionId: 'parent' as SessionId, childSessionId: 'child' as SessionId, mode: 'continuable' as const }
@@ -255,12 +255,31 @@ describe('Hub Web adapter endpoint ownership', () => {
     const host = vi.fn()
     const disposeHost = transport.subscribeHost([{ endpointId: 'remote:first', workspaceId: 'workspace-a' }], (notification) => { host(notification.frame) })
     const hostSource = FakeEventSource.instances.at(-1)!
+    hostSource.onmessage?.({ data: JSON.stringify({ endpointId: 'remote:first', workspaceId: 'workspace-other', frame: { type: 'host/session-status' } }) } as MessageEvent)
+    expect(host).not.toHaveBeenCalled()
     hostSource.onmessage?.({ data: JSON.stringify({ endpointId: 'remote:first', workspaceId: 'workspace-a', frame: { type: 'host/session-status' } }) } as MessageEvent)
     expect(host).toHaveBeenCalledWith({ type: 'host/session-status' })
+    hostSource.onmessage?.({ data: JSON.stringify({ endpointId: 'remote:first', workspaceId: null, frame: { type: 'host/session-status' } }) } as MessageEvent)
+    expect(host).toHaveBeenCalledTimes(2)
     disposeHost()
     disposeSecond()
     expect(reconnected.close).toHaveBeenCalled()
     reconnected.onerror?.()
+    vi.unstubAllGlobals()
+  })
+
+  it('rejects non-text host event data', () => {
+    class FakeEventSource {
+      static instance: FakeEventSource | undefined
+      onmessage: ((event: MessageEvent) => void) | null = null
+      close = vi.fn()
+      constructor(readonly url: string) { void url; FakeEventSource.instance = this }
+    }
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const listener = vi.fn()
+    const dispose = createRemoteSessionTransport('remote:first').subscribeHost([], listener)
+    expect(() => FakeEventSource.instance?.onmessage?.({ data: {} } as MessageEvent)).toThrow('Hub event data must be JSON text')
+    dispose()
     vi.unstubAllGlobals()
   })
 
@@ -277,7 +296,7 @@ describe('Hub Web adapter endpoint ownership', () => {
 
   it('omits an undefined fork sequence from the forwarded payload', async () => {
     const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({
-      result: { ok: true, value: { sessionId: 'forked' } },
+      ok: true, value: { sessionId: 'forked' },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     try {
       await createRemoteSessionTransport('remote:first').fork('workspace-a', 'session-1' as SessionId)

@@ -191,9 +191,9 @@ async function call<T>(method: string, params: Record<string, unknown>): Promise
     body: JSON.stringify({ method, params }),
   })
   if (!response.ok) return failure(response)
-  const body = await response.json() as { result?: RpcResult<T> }
-  if (body.result !== undefined) return body.result
-  return { ok: false, error: { code: 'internal', message: 'Hub API response is missing result', details: {} } }
+  const body = await response.json() as RpcResult<T>
+  if (body.ok === true || body.ok === false) return body
+  return { ok: false, error: { code: 'internal', message: 'Hub API response is not an RpcResult', details: {} } }
 }
 
 /** Create the Web transport for one configured Hub endpoint.
