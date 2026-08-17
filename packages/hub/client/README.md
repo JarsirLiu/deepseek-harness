@@ -12,6 +12,8 @@ The package also exports `HubEndpointAgent` for a Host that registers itself wit
 
 After registration, the Agent consumes the same Host `api.events.host` stream used by local clients. It determines each frame's workspace from the published directory, forwards the unchanged frame through the Hub, and aborts and awaits the stream during disconnect. An endpoint-wide frame uses `workspaceId: null`; a project frame without a unique owner terminates the bridge instead of being broadcast ambiguously. A directory snapshot failure closes the Agent connection so the Hub cannot continue advertising stale metadata.
 
+An unexpected Hub socket close aborts the Host stream and clears the registration and directory state. Calling `connect()` again is the explicit recovery operation: it waits for the old stream to finish, reads a new authoritative directory snapshot, and registers a new Hub connection. The Agent does not retry or reconnect in the background.
+
 ## Installation
 
 Install `@deepseek-ai/dsh-hub-client` through the Harness plugin manager or add its `cordis.patch.yml` row to a profile. The package declares its protocol, session, persistence, and invariant peers; a profile must provide those packages at compatible versions.

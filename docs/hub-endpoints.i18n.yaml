@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/hub-endpoints.md
-hub-endpoints.md: 1e70a355b5a241b09501005b096daef72adab64d
-hub-endpoints.zh.md: eb1a327952122e9096f2fe6039884e3dce56da9a
+hub-endpoints.md: 2636f5804244824853bf019287669a7ab17a449c
+hub-endpoints.zh.md: cb79fa50346c64ec50c282a5a8723cbe8b8aba29

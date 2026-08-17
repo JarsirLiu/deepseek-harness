@@ -12,6 +12,8 @@
 
 注册完成后，Agent 消费与本地客户端相同的 Host `api.events.host` 流。它根据已发布的目录确定每帧所属工作区，通过 Hub 转发未修改的帧，并在断连时 abort 且等待流结束。端点级帧使用 `workspaceId: null`；无法唯一确定项目归属的项目帧会终止桥接，而不会产生歧义广播。目录快照失败会关闭 Agent 连接，Hub 不会继续公布旧目录元数据。
 
+Hub socket 意外关闭时，Agent 会中止 Host 流并清除注册和目录状态。调用方再次调用 `connect()` 即执行显式恢复：Agent 等待旧流结束，重新读取权威目录快照，并注册新的 Hub 连接。Agent 不会在后台自动重试或重连。
+
 ## 安装
 
 通过 Harness plugin manager 安装 `@deepseek-ai/dsh-hub-client`，或将其 `cordis.patch.yml` row 加入 profile。本包声明 protocol、session、persistence 和 invariant peer；profile 必须提供兼容版本的这些包。

@@ -32,6 +32,8 @@ The Broker manages Endpoint Agent and Web client connections independently. Auth
 
 An Endpoint Agent registers its endpoint with the Broker and publishes a complete directory snapshot read from its Host's `workspace.list` and `session.list` APIs. Workspace and session directory frames trigger serial replacement snapshots; a snapshot failure disconnects the Agent so the Broker does not retain stale metadata. The Broker stores endpoint presence and directory metadata, applies access policy, and forwards requests and Host event frames. Session logs, workspaces, models, and other Host state remain owned by the Endpoint.
 
+If the Agent's Hub socket closes unexpectedly, the Agent aborts its Host event stream and clears its registration and directory state. A caller explicitly recovers by calling `connect()` again; that call waits for the old stream to finish, reads a fresh directory snapshot, and registers the new connection. The Agent does not perform background retries.
+
 Any node may run the Broker role alongside its own Host. A single-host deployment remains valid, and a dedicated Broker may run without owning a Host. Multi-endpoint discovery requires the Broker role and an Agent connection from every participating Host. Endpoints reach one another through authorized Host API calls routed by the Broker; the Broker does not provide arbitrary network access between endpoints.
 
 ## Replaceable Hubs

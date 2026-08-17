@@ -11,7 +11,6 @@ import {
   type HubAgentHostEventParams,
   type HubAgentRegisterResult,
   type HubEndpointSummary,
-  type JsonRpcTransportPeer,
 } from '@deepseek-ai/dsh-hub-protocol'
 import type { ApiProxy, RpcId } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { HubWorkspaceDirectory, HubWorkspaceDirectoryEntry } from './workspace-directory.ts'
@@ -35,7 +34,7 @@ export interface HubEndpointAgentConfig {
 /** Outbound connection used by a Host to register with a Hub listener. */
 export class HubEndpointAgent {
   private ws: WebSocket | null = null
-  private transport: JsonRpcTransportPeer | null = null
+  private transport: JsonRpcWebSocketTransport | null = null
   private registration: HubAgentRegisterResult | null = null
   private workspaces = new Map<string, HubWorkspaceOwnershipEntry>()
   private hostAbortController: AbortController | null = null
@@ -48,9 +47,12 @@ export class HubEndpointAgent {
    * @returns the registration result returned by the Hub listener.
    */
   async connect(): Promise<HubAgentRegisterResult> {
-    if (this.transport !== null) throw new Error('Endpoint Agent is already connected')
+    if (this.ws !== null || this.transport !== null) throw new Error('Endpoint Agent is already connected')
+    await this.hostStreamDone
+    if (this.ws !== null || this.transport !== null) throw new Error('Endpoint Agent is already connected')
     const ws = new WebSocket(this.config.uri)
     this.ws = ws
+    ws.once('close', () => { this.handleSocketClose(ws) })
     try {
       await new Promise<void>((resolve, reject) => {
         const onError = (error: Error): void => { reject(error) }
@@ -115,9 +117,10 @@ export class HubEndpointAgent {
 
   /** Disconnect this Endpoint Agent from the Hub. */
   async disconnect(): Promise<void> {
+    const ws = this.ws
     this.hostAbortController?.abort()
     await this.hostStreamDone
-    this.ws?.close()
+    this.transport?.close()
     this.transport = null
     this.ws = null
     this.registration = null
@@ -125,6 +128,7 @@ export class HubEndpointAgent {
     this.hostAbortController = null
     this.hostStreamDone = null
     this.hostStreamError = null
+    ws?.close()
   }
 
   /** Registration response from the current connection. */
@@ -171,7 +175,7 @@ export class HubEndpointAgent {
   private startHostBridge(): void {
     const controller = new AbortController()
     this.hostAbortController = controller
-    this.hostStreamDone = (async () => {
+    const done = (async () => {
       try {
         for await (const envelope of this.config.apiProxy.events.host({ rpcId: `hub-agent-host-${randomUUID()}` as RpcId, payload: {} }, controller.signal)) {
           await this.bridgeHostFrame(envelope.payload)
@@ -180,6 +184,13 @@ export class HubEndpointAgent {
         if (!controller.signal.aborted) this.failHostBridge(error)
       }
     })()
+    this.hostStreamDone = done
+    void done.finally(() => {
+      if (this.hostStreamDone === done) {
+        this.hostStreamDone = null
+        this.hostAbortController = null
+      }
+    })
   }
 
   private async bridgeHostFrame(frame: import('@deepseek-ai/dsh-host-apiproxy/api').HostFrame): Promise<void> {
@@ -209,8 +220,16 @@ export class HubEndpointAgent {
 
   private failHostBridge(error: unknown): void {
     this.hostStreamError = error
+    const ws = this.ws
+    this.handleSocketClose(ws)
+    ws?.close()
+  }
+
+  private handleSocketClose(ws: WebSocket | null): void {
+    if (ws === null || this.ws !== ws) return
+    this.hostStreamError ??= new Error('Endpoint Agent Hub connection closed')
     this.hostAbortController?.abort()
-    this.ws?.close()
+    this.transport?.close()
     this.transport = null
     this.ws = null
     this.registration = null

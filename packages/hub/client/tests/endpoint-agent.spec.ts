@@ -131,6 +131,32 @@ describe('HubEndpointAgent', () => {
     FakeWebSocket.behavior = 'open'
   })
 
+  it('stops the Host stream after an unexpected close and re-registers a fresh directory', async () => {
+    const updatedWorkspace = { ...workspace, title: 'Workspace B' }
+    const hostSignals: AbortSignal[] = []
+    const agent = createAgent({}, async function* (signal) {
+      hostSignals.push(signal)
+      await new Promise<void>((resolve) => { signal.addEventListener('abort', () => { resolve() }, { once: true }) })
+    }, [workspace, updatedWorkspace])
+    await agent.connect()
+
+    FakeWebSocket.instances.at(-1)!.close()
+
+    expect(agent.registrationResult).toBeNull()
+    expect(agent.hostStreamFailure).toBeInstanceOf(Error)
+    expect((agent.hostStreamFailure as Error).message).toBe('Endpoint Agent Hub connection closed')
+    expect(hostSignals[0]?.aborted).toBe(true)
+
+    await agent.connect()
+    const messages = FakeWebSocket.instances.at(-1)!.sent.map(message =>
+      JSON.parse(message) as { method: string; params: Record<string, unknown> })
+    expect(messages).toHaveLength(1)
+    expect(messages[0]?.method).toBe('hub/agent/register')
+    expect(messages[0]?.params.workspaces).toEqual([{ ...updatedWorkspace, endpointId: 'remote:agent' }])
+    expect(hostSignals).toHaveLength(2)
+    await agent.disconnect()
+  })
+
   it('rejects duplicate connections and unknown workspace host events', async () => {
     const agent = createAgent()
     await agent.connect()
