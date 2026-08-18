@@ -72,6 +72,8 @@ export interface HubServerConfig {
   agentTokens?: Record<string, string>
   /** Server identity name. */
   serverName?: string
+  /** Remote preset selected for each published workspace, keyed by workspace id. */
+  workspacePresets?: Record<string, string>
 }
 
 const DEFAULTS = {
@@ -105,6 +107,7 @@ export class HubServer {
       authTokens: config.authTokens ?? [],
       agentTokens: config.agentTokens ?? {},
       serverName: config.serverName ?? DEFAULTS.serverName,
+      workspacePresets: config.workspacePresets ?? {},
     }
 
     // Handle WebSocket upgrade requests.

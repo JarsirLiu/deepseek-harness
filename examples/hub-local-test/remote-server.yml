@@ -10,4 +10,5 @@
     authTokens: ['dsh-local-test-token']
     serverName: remote-local-test
     # Optional: map the remote workspace id to a preset owned by this device.
+    # workspacePresets:
     #   '<remote-workspace-id>': standard
