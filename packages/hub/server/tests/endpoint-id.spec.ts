@@ -2,6 +2,10 @@ import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
 import { HubServer } from '../src/server.ts'
 
+async function* emptyMuxStream(): AsyncGenerator<never> {
+  return
+}
+
 describe('Hub endpoint identity', () => {
   it('requires start before waiting and supports the persistence list path', async () => {
     const server = new HubServer({
@@ -300,7 +304,7 @@ describe('Hub endpoint identity', () => {
   it('completes authenticated handshake and Agent registration state transitions', () => {
     const host = async function* (): AsyncGenerator<never> { return }
     const server = new HubServer({
-      get: (key: string) => key === 'apiProxy' ? { events: { host } } : undefined,
+      get: (key: string) => key === 'apiProxy' ? { events: { host, mux: emptyMuxStream } } : undefined,
     } as never, {
       endpointId: 'remote:broker',
       authTokens: ['client-secret'],
@@ -521,7 +525,6 @@ describe('Hub endpoint identity', () => {
     })
 
     server.start()
-    listeners.get('session/event')!({ id: 'orphan' } as never, { type: 'assistant/chunk' } as never)
     listeners.get('session/created')!({ id: 'orphan' } as never)
     listeners.get('session/disposed')!({ id: 'orphan' } as never)
 
@@ -536,7 +539,7 @@ describe('Hub endpoint identity', () => {
       await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }))
     })
     const server = new HubServer({
-      get: (key: string) => key === 'apiProxy' ? { events: { host } } : undefined,
+      get: (key: string) => key === 'apiProxy' ? { events: { host, mux: emptyMuxStream } } : undefined,
     } as never, { endpointId: 'remote:broker', port: 0 })
     const client = {
       subscribedAll: true,
@@ -566,7 +569,7 @@ describe('Hub endpoint identity', () => {
     const server = new HubServer({
       get: (key: string) => key === 'workspaceRegistry'
         ? { list: () => [{ id: 'workspace-a', sessionIds: ['session-a'] }, { id: 'workspace-b', sessionIds: ['session-other'] }] }
-        : key === 'apiProxy' ? { events: { host } } : undefined,
+        : key === 'apiProxy' ? { events: { host, mux: emptyMuxStream } } : undefined,
     } as never, { endpointId: 'remote:broker', port: 0 })
     const notifications: unknown[] = []
     const client = {

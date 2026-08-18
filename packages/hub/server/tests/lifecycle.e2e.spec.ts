@@ -11,6 +11,10 @@ async function* emptyHostStream(): AsyncGenerator<never> {
   return
 }
 
+async function* emptyMuxStream(): AsyncGenerator<never> {
+  return
+}
+
 function waitFor<T>(predicate: () => T | undefined, label: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => { reject(new Error(`timed out waiting for ${label}`)) }, 1000)
@@ -79,7 +83,7 @@ describe('HubServer WebSocket lifecycle', () => {
     const server = new HubServer({
       logger: { info: vi.fn() },
       on: vi.fn(() => vi.fn()),
-      get: (key: string) => key === 'apiProxy' ? { events: { host } } : undefined,
+      get: (key: string) => key === 'apiProxy' ? { events: { host, mux: emptyMuxStream } } : undefined,
     } as never, { endpointId: 'remote:broker', authTokens: ['secret'], port: 0 })
     server.start()
     await server.waitUntilListening()
@@ -122,7 +126,7 @@ describe('HubServer WebSocket lifecycle', () => {
     const server = new HubServer({
       logger: { info: vi.fn() },
       on: vi.fn(() => vi.fn()),
-      get: (key: string) => key === 'apiProxy' ? { events: { host: emptyHostStream } } : undefined,
+      get: (key: string) => key === 'apiProxy' ? { events: { host: emptyHostStream, mux: emptyMuxStream } } : undefined,
     } as never, {
       endpointId: 'remote:broker',
       agentTokens: { 'remote:agent': 'agent-secret' },
@@ -168,7 +172,7 @@ describe('HubServer WebSocket lifecycle', () => {
     const server = new HubServer({
       logger: { info: vi.fn() },
       on: vi.fn(() => vi.fn()),
-      get: (key: string) => key === 'apiProxy' ? { events: { host: emptyHostStream } } : undefined,
+      get: (key: string) => key === 'apiProxy' ? { events: { host: emptyHostStream, mux: emptyMuxStream } } : undefined,
     } as never, {
       endpointId: 'remote:broker',
       agentTokens: { 'remote:agent': 'agent-secret' },
@@ -217,7 +221,7 @@ describe('HubServer WebSocket lifecycle', () => {
     const server = new HubServer({
       logger: { info: vi.fn(), warn: vi.fn() },
       on: vi.fn(() => vi.fn()),
-      get: (key: string) => key === 'apiProxy' ? { events: { host: emptyHostStream } } : undefined,
+      get: (key: string) => key === 'apiProxy' ? { events: { host: emptyHostStream, mux: emptyMuxStream } } : undefined,
     } as never, {
       endpointId: 'remote:broker', agentTokens: { 'remote:agent': 'agent-secret' }, port: 0,
     })
@@ -265,6 +269,7 @@ describe('HubServer WebSocket lifecycle', () => {
 
   it('forwards session events and lifecycle status to the matching subscription', async () => {
     const listeners = new Map<string, (value: never) => void>()
+    let releaseMux: (() => void) | undefined
     const server = new HubServer({
       logger: { info: vi.fn() },
       on: vi.fn((event: string, listener: (value: never) => void) => {
@@ -273,7 +278,18 @@ describe('HubServer WebSocket lifecycle', () => {
       }),
       get: (key: string) => key === 'workspaceRegistry'
         ? { list: () => [workspace] }
-        : key === 'apiProxy' ? { events: { host: emptyHostStream } }
+        : key === 'apiProxy' ? {
+          events: {
+            host: emptyHostStream,
+            mux: async function* (_request: unknown, signal: AbortSignal) {
+              await new Promise<void>((resolve) => { releaseMux = resolve })
+              if (signal.aborted) return
+              yield { payload: { type: 'session/event', sessionId: 'session-a', event: { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'hello' }] } } } }
+              yield { payload: { type: 'session/event', sessionId: 'session-a', event: { type: 'assistant/chunk', content: 'ok' } } }
+              await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }))
+            },
+          },
+        }
           : undefined,
     } as never, { endpointId: 'remote:broker', port: 0 })
 
@@ -291,13 +307,24 @@ describe('HubServer WebSocket lifecycle', () => {
     transport.start()
     await transport.request('hub/handshake', {})
     await transport.request('hub/subscribe', { id: 'session-a', workspaceId: 'workspace-a' })
+    releaseMux?.()
 
-    listeners.get('session/event')!({ id: 'session-a', event: { type: 'assistant/chunk', content: 'ok' } } as never)
     listeners.get('session/created')!({ id: 'session-a' } as never)
     listeners.get('session/disposed')!({ id: 'session-a' } as never)
-    await waitFor(() => notifications.length === 3 ? notifications : undefined, 'session notifications')
-    expect(notifications.map(({ method }) => method)).toEqual(['hub/event', 'hub/status', 'hub/status'])
-    expect(notifications[0]?.params).toMatchObject({ endpointId: 'remote:broker', workspaceId: 'workspace-a', sessionId: 'session-a' })
+    await waitFor(() => notifications.length === 4 ? notifications : undefined, 'session notifications')
+    expect(notifications.map(({ method }) => method)).toEqual(expect.arrayContaining(['hub/event', 'hub/status', 'hub/status']))
+    const events = notifications
+      .filter(({ method }) => method === 'hub/event')
+      .map(notification => notification.params)
+    expect(events).toHaveLength(2)
+    expect(events[0]).toMatchObject({
+      endpointId: 'remote:broker', workspaceId: 'workspace-a', sessionId: 'session-a',
+      event: { type: 'user/message', data: { source: { kind: 'user' } } },
+    })
+    expect(events[1]).toMatchObject({
+      endpointId: 'remote:broker', workspaceId: 'workspace-a', sessionId: 'session-a',
+      event: { type: 'assistant/chunk', content: 'ok' },
+    })
     await server.stop()
     transport.close()
   })
@@ -308,7 +335,7 @@ describe('HubServer WebSocket lifecycle', () => {
       on: vi.fn(() => vi.fn()),
       sessions: { list: () => [] },
       get: (key: string) => key === 'workspaceRegistry' ? { list: () => [], archivedSessionIds: [] }
-        : key === 'apiProxy' ? { events: { host: emptyHostStream } }
+        : key === 'apiProxy' ? { events: { host: emptyHostStream, mux: emptyMuxStream } }
           : undefined,
     } as never, { endpointId: 'remote:broker', port: 0 })
     server.start()
@@ -350,7 +377,7 @@ describe('HubServer WebSocket lifecycle', () => {
       logger: { info: vi.fn() },
       on: vi.fn(() => disposers[disposerIndex++] ?? vi.fn()),
       get: (key: string) => key === 'workspaceRegistry' ? { list: () => [workspace] }
-        : key === 'apiProxy' ? { events: { host } } : undefined,
+        : key === 'apiProxy' ? { events: { host, mux: emptyMuxStream } } : undefined,
     } as never, { endpointId: 'remote:broker', port: 0 })
 
     server.start()
@@ -397,7 +424,7 @@ describe('HubServer WebSocket lifecycle', () => {
       logger: { info: vi.fn() },
       on: vi.fn(() => vi.fn()),
       get: (key: string) => key === 'workspaceRegistry' ? { list: () => [workspace] }
-        : key === 'apiProxy' ? { events: { host } } : undefined,
+        : key === 'apiProxy' ? { events: { host, mux: emptyMuxStream } } : undefined,
     } as never, { endpointId: 'remote:broker', port: 0 })
 
     server.start()

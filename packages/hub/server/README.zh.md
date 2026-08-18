@@ -8,6 +8,8 @@
 
 插件 profile row 必须提供稳定的 `endpointId`，并接受 `port`、`host`、`authTokens`、`agentTokens` 和 `serverName`。`endpointId` 由拥有所发布会话的 Host 持有，在握手时返回；它不会从客户端配置或 `serverName` 推导。`agentTokens` 将稳定的 Endpoint Agent 身份映射到显式注册凭据。已注册 Agent 通过同一个 listener 发布工作区摘要，经过认证的 Client 使用 `hub/list-endpoints` 或 `hub/workspaces` 发现这些资源。workspace 条目保留所属 `endpointId`，因此不同端点上同名的 workspace 仍然彼此独立。API 请求同时携带 `endpointId` 和 `workspaceId`；server 校验已发布的工作区，将注册端点的请求转发给所属 Agent，并返回 Agent 的原始 API 结果。插件持有监听服务器，并随插件 fiber 一起释放。默认只监听回环地址；只有配置认证并保护传输时才应指定非回环地址。
 
+本地会话事件来自 Host 官方的 `api.events.mux` 流。Hub 不重写用户消息或 assistant 输出，而是保留每个 `session/event`，仅发送给订阅所属会话的 Client。Host 的 `api.events.host` 流仍然负责工作区和运行状态通知。
+
 ## 安装
 
 通过 Harness plugin manager 安装 `@deepseek-ai/dsh-hub-server`，或将其 `cordis.patch.yml` row 加入 profile。本包声明 protocol、session、persistence 和 invariant peer；profile 必须提供兼容版本的这些包。

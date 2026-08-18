@@ -10,7 +10,7 @@ import { createServer } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import type { RpcId } from '@deepseek-ai/dsh-host-apiproxy/api'
+import type { MuxFrame, RpcId } from '@deepseek-ai/dsh-host-apiproxy/api'
 import { hostFrameWorkspaceIds, isHostFrameVisibleToWorkspaces, type WorkspaceSubscriptionEntry } from './workspace-subscription.ts'
 export { hostFrameWorkspaceIds, isHostFrameVisibleToWorkspaces } from './workspace-subscription.ts'
 import {
@@ -54,6 +54,7 @@ interface ClientRecord {
   serverInfo?: { name: string; version: string }
   workspaces?: HubWorkspaceEntry[]
   hostAbortController?: AbortController
+  muxAbortController?: AbortController
 }
 
 /**
@@ -144,15 +145,6 @@ export class HubServer {
     })
     this.ctx.logger.info(`hub server listening on ${this.config.host}:${this.config.port}`)
 
-    // Subscribe to session events for forwarding to subscribed clients.
-    this.eventDisposers.push(this.ctx.on('session/event', (_session, event) => {
-      const sessionId = _session.id
-      const workspaceId = this.workspaceForSession(sessionId)
-      if (workspaceId === undefined) return
-      const notification: HubEventNotification = { endpointId: this.config.endpointId, workspaceId, sessionId, event }
-      this.broadcastToSubscribers(workspaceId, sessionId, 'hub/event', notification)
-    }))
-
     // Subscribe to session lifecycle events.
     this.eventDisposers.push(this.ctx.on('session/created', (session) => {
       const workspaceId = this.workspaceForSession(session.id)
@@ -190,6 +182,7 @@ export class HubServer {
     for (const dispose of this.eventDisposers.splice(0)) dispose()
     for (const [id, client] of this.clients) {
       client.hostAbortController?.abort()
+      client.muxAbortController?.abort()
       client.transport.close()
       client.socket.close()
       this.clients.delete(id)
@@ -232,6 +225,7 @@ export class HubServer {
 
     ws.on('close', () => {
       client.hostAbortController?.abort()
+      client.muxAbortController?.abort()
       transport.close()
       this.clients.delete(clientId)
     })
@@ -280,6 +274,7 @@ export class HubServer {
     }
     client.authenticated = true
     this.startHostStream(client)
+    this.startMuxStream(client)
 
     const capabilities: HubCapabilities = {
       subscriptions: true,
@@ -378,6 +373,44 @@ export class HubServer {
               frame: { type: 'stream/error', error: { code: 'internal', message: error instanceof Error ? error.message : String(error) } },
             })
           } catch { /* disconnected client */ }
+        }
+      }
+    })()
+  }
+
+  /** Forward the official api.events.mux stream to this Client's subscriptions. */
+  private startMuxStream(client: ClientRecord): void {
+    if (client.muxAbortController !== undefined) return
+    const api = this.ctx.get('apiProxy') as {
+      events?: {
+        mux: (request: { rpcId: string; payload: Record<string, never> }, signal: AbortSignal) => AsyncIterable<{
+          payload: MuxFrame
+        }>
+      }
+    } | undefined
+    const mux = api?.events?.mux
+    if (mux === undefined) throw new Error('Host mux event API is unavailable')
+    const controller = new AbortController()
+    client.muxAbortController = controller
+    void (async () => {
+      try {
+        for await (const envelope of mux({ rpcId: `hub-mux-${randomUUID()}`, payload: {} }, controller.signal)) {
+          const frame = envelope.payload
+          if (frame.type !== 'session/event') continue
+          const workspaceId = this.workspaceForSession(frame.sessionId)
+          if (workspaceId === undefined) continue
+          if (!client.subscribedAll
+            && !client.subscribedSessions.has(sessionSubscriptionKey(workspaceId, frame.sessionId))) continue
+          client.transport.notify('hub/event', {
+            endpointId: this.config.endpointId,
+            workspaceId,
+            sessionId: frame.sessionId,
+            event: frame.event,
+          })
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          this.ctx.logger.warn(`hub mux stream failed: ${error instanceof Error ? error.message : String(error)}`)
         }
       }
     })()

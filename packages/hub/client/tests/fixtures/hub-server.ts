@@ -13,7 +13,14 @@ const ctx = {
   },
   on: (_event: string, _listener: (...args: never[]) => void) => () => {},
   get: (key: string): unknown => key === 'apiProxy'
-    ? { events: { host: async function* () { await new Promise<void>(() => {}) } } }
+    ? {
+      events: {
+        host: async function* () { await new Promise<void>(() => {}) },
+        mux: async function* (_request: unknown, signal: AbortSignal) {
+          await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }))
+        },
+      },
+    }
     : undefined,
 }
 
