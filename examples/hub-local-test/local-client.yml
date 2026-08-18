@@ -1,8 +1,18 @@
 # Local two-process test: run this on the simulated local device.
 
+- id: hub-server
+  disabled: false
+  config:
+    serverName: local-test-hub
+    host: '127.0.0.1'
+    port: 8766
+    authTokens: []
+
 - id: hub-client
   disabled: false
   config:
-    uri: 'ws://127.0.0.1:8765/hub'
-    token: 'dsh-local-test-token'
-    autoConnect: true
+    # The client plugin is enabled for its Host settings API.  Connections are
+    # created from the Web settings page, not from the launch profile.
+    uri: ''
+    token: ''
+    autoConnect: false

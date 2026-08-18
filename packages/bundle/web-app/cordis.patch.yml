@@ -99,20 +99,20 @@
     # installing unpublished workspace packages into an isolated profile.
     - id: hub-server
       name: '@deepseek-ai/dsh-hub-server'
-      disabled: true
+      disabled: false
       config:
         port: 8765
-        host: '127.0.0.1'
+        host: '0.0.0.0'
         authTokens: []
         serverName: deepseek-harness-hub
 
     - id: hub-client
       name: '@deepseek-ai/dsh-hub-client'
-      disabled: true
+      disabled: false
       config:
         uri: ''
         token: ''
-        autoConnect: true
+        autoConnect: false
 
     # The API gateway: the transport-agnostic dispatch face every client shape
     # shares. The base layer's agent-default-model service owns the default model.

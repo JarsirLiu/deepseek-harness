@@ -141,6 +141,8 @@ Web client -> Host API through the selected endpoint
 
 The server requires authentication before accepting non-loopback access. The settings page displays the connection address and a redacted credential state, never the stored token value.
 
+The local Hub service is configured through `hub.server.*` Host operations. `HubServerManager` persists the bind address, port, server name, enabled state, endpoint identity, and credential reference through the settings provider. The browser calls the Host web API for get, update, start, stop, and test operations; it never owns the listener or resolves credentials.
+
 An externally reachable Broker must bind to a reachable interface, use an allowed firewall and proxy route, and expose a TLS endpoint in production. The advertised connection address must be the address other endpoints can reach, not an internal `127.0.0.1` listener address. Non-loopback access is rejected without authentication.
 
 ## Package Responsibilities

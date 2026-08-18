@@ -7,6 +7,8 @@
  */
 
 export { JsonRpcWebSocketTransport, JsonRpcResponseError } from './transport.ts'
+export { decodeHubConnectionCredential, encodeHubConnectionCredential } from './connection-credential.ts'
+export type { HubConnectionCredential } from './connection-credential.ts'
 export type { JsonRpcTransportPeer } from './transport.ts'
 export {
   hostFrameWorkspaceIds,

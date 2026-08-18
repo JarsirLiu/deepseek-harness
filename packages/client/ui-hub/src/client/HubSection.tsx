@@ -27,7 +27,15 @@ export interface HubSectionInjected {
   /** List configured Hub endpoints without exposing credentials. */
   listEndpoints: () => Promise<HubEndpointState[]>
   /** Apply one endpoint management operation through the Host. */
-  endpointOperation: (operation: string, body: Record<string, unknown>) => Promise<void>
+  endpointOperation: (operation: string, body: Record<string, unknown>) => Promise<unknown>
+  /** Load the local Hub listener state. */
+  loadServer: () => Promise<HubServerState | undefined>
+  /** Apply a local Hub listener operation. */
+  serverOperation: (operation: string, body?: Record<string, unknown>) => Promise<unknown>
+  /** Load endpoint-qualified workspace selections from Host settings. */
+  loadSelectedWorkspaces: () => Promise<HubWorkspaceRef[]>
+  /** Persist endpoint-qualified workspace selections in Host settings. */
+  saveSelectedWorkspaces: (workspaces: HubWorkspaceRef[]) => Promise<void>
 }
 
 /** Redacted endpoint state returned by the Host connection manager. */
@@ -39,6 +47,19 @@ export interface HubEndpointState {
   enabled: boolean
   status: string
   endpointId?: string
+  error?: string
+}
+
+/** Redacted local Hub listener state. */
+export interface HubServerState {
+  endpointId: string
+  serverName: string
+  host: string
+  port: number
+  credentialRef: string
+  credentialEnabled?: boolean
+  enabled: boolean
+  status: string
   error?: string
 }
 
@@ -72,24 +93,46 @@ const STATUS_DOT_CLASS: Record<HubStatusResponse['status'], string> = {
  * @param props - section owner props and localized copy.
  * @returns the section element tree.
  */
-export function HubSection({ t, loadStatus, loadWorkspaces, reconnect, listEndpoints, endpointOperation }: HubSectionProps): ReactNode {
+export function HubSection({
+  t, loadStatus, loadWorkspaces, reconnect, listEndpoints, endpointOperation,
+  loadServer, serverOperation, loadSelectedWorkspaces, saveSelectedWorkspaces,
+}: HubSectionProps): ReactNode {
   const [state, setState] = useState<ViewState>({ kind: 'loading' })
   const [workspaces, setWorkspaces] = useState<HubWorkspaceEntry[]>([])
-  const [selectedRefs, setSelectedRefs] = useState<HubWorkspaceRef[]>(() => readSelectedWorkspaceRefs())
+  const [selectedRefs, setSelectedRefs] = useState<HubWorkspaceRef[]>([])
   const [workspacesVersion, setWorkspacesVersion] = useState(0)
   const [endpoints, setEndpoints] = useState<HubEndpointState[]>([])
-  const [newEndpoint, setNewEndpoint] = useState({ id: '', label: '', uri: '', credentialRef: '' })
+  const [endpointsLoaded, setEndpointsLoaded] = useState(false)
+  const [connectionCredential, setConnectionCredential] = useState('')
+  const [generatedCredential, setGeneratedCredential] = useState('')
+  const [server, setServer] = useState<HubServerState>()
+  const [serverPatch, setServerPatch] = useState({ serverName: '' })
+
+  const loadCredential = useCallback(async (): Promise<void> => {
+    const result = await serverOperation('credential') as { result?: string }
+    if (typeof result.result === 'string') setGeneratedCredential(result.result)
+  }, [serverOperation])
 
   const refreshEndpoints = useCallback(() => {
-    void listEndpoints().then(setEndpoints).catch(() => setEndpoints([]))
+    void listEndpoints()
+      .then((value) => { setEndpoints(value); setEndpointsLoaded(true) })
+      .catch(() => { setEndpoints([]); setEndpointsLoaded(true) })
   }, [listEndpoints])
 
   useEffect(() => { refreshEndpoints() }, [refreshEndpoints])
+  useEffect(() => { void loadSelectedWorkspaces().then(setSelectedRefs).catch(() => setSelectedRefs([])) }, [loadSelectedWorkspaces])
+  useEffect(() => { void loadServer().then((value) => {
+    if (value !== undefined) {
+      setServer(value)
+      setServerPatch({ serverName: value.serverName })
+      void loadCredential().catch(() => undefined)
+    }
+  }) }, [loadCredential, loadServer])
 
   const addEndpoint = (): void => {
-    if (!newEndpoint.id || !newEndpoint.uri) return
-    void endpointOperation('create', { config: { ...newEndpoint, label: newEndpoint.label || newEndpoint.id, enabled: true } }).then(() => {
-      setNewEndpoint({ id: '', label: '', uri: '', credentialRef: '' })
+    if (!connectionCredential.trim()) return
+    void endpointOperation('import-credential', { credential: connectionCredential }).then(() => {
+      setConnectionCredential('')
       refreshEndpoints()
     })
   }
@@ -101,11 +144,16 @@ export function HubSection({ t, loadStatus, loadWorkspaces, reconnect, listEndpo
       ? selectedRefs.filter(item => item.endpointId !== ref.endpointId || item.workspaceId !== ref.workspaceId)
       : [...selectedRefs, ref]
     setSelectedRefs(next)
-    globalThis.localStorage.setItem(SELECTED_WORKSPACES_KEY, JSON.stringify(next))
+    void saveSelectedWorkspaces(next)
     globalThis.dispatchEvent(new CustomEvent('dsh:remote-workspaces-changed'))
   }
 
   const fetchStatus = useCallback((): void => {
+    if (!endpointsLoaded) return
+    if (endpoints.length === 0) {
+      setState({ kind: 'unavailable' })
+      return
+    }
     setState({ kind: 'loading' })
     setWorkspacesVersion(version => version + 1)
     reconnect()
@@ -116,7 +164,7 @@ export function HubSection({ t, loadStatus, loadWorkspaces, reconnect, listEndpo
         if (!(error instanceof Error)) throw error
         setState({ kind: 'error', message: error.message })
       })
-  }, [loadStatus, reconnect])
+  }, [endpoints.length, endpointsLoaded, loadStatus, reconnect])
 
   useEffect(() => {
     fetchStatus()
@@ -144,15 +192,80 @@ export function HubSection({ t, loadStatus, loadWorkspaces, reconnect, listEndpo
     )
   }
 
-  // Unavailable: no hub-client installed.
+  const serverPanel = server === undefined ? null : (
+    <section className={css.panel} aria-labelledby="hub-server-heading">
+      <div className={css.panelHeader}>
+        <div>
+          <h4 id="hub-server-heading" className={css.panelTitle}>本机 Hub 服务</h4>
+          <p className={css.panelHint}>让其他端点通过凭据连接到本机。</p>
+        </div>
+        <span className={`${css.badge} ${server.status === 'running' ? css.badgeSuccess : css.badgeMuted}`}>{server.status === 'running' ? '运行中' : server.status}</span>
+      </div>
+      <div className={css.serverMeta}>
+        <code className={css.mono}>{server.host}:{server.port}</code>
+        <Button variant="outline" size="sm" onClick={() => { void serverOperation(server.status === 'running' ? 'stop' : 'start').then(() => loadServer().then((value) => { if (value !== undefined) setServer(value) })) }}>{server.status === 'running' ? '停止服务' : '启动服务'}</Button>
+        <Button variant="outline" size="sm" onClick={() => { void serverOperation('test') }}>测试连接</Button>
+      </div>
+      <div className={css.formRow}>
+        <label className={css.field}>
+          <span className={css.fieldLabel}>服务名称</span>
+          <input className={css.input} aria-label="本机 Hub 名称" value={serverPatch.serverName} placeholder="输入服务名称" onChange={event => setServerPatch({ serverName: event.target.value })} />
+        </label>
+        <Button variant="outline" size="sm" onClick={() => { void serverOperation('update', { patch: { serverName: serverPatch.serverName } }).then(() => loadServer().then((value) => { if (value !== undefined) setServer(value) })) }}>保存</Button>
+      </div>
+      <div className={css.credentialRow}>
+        <div className={css.field}>
+          <span className={css.fieldLabel}>连接凭据</span>
+          {generatedCredential
+            ? <input className={`${css.input} ${css.credentialInput} ${css.mono}`} aria-label="本机 Hub 连接凭据" value={generatedCredential} readOnly />
+            : <span className={css.fieldHint}>生成后复制给需要连接本机的端点。</span>}
+        </div>
+        {generatedCredential && <Button variant="outline" size="sm" onClick={() => { void navigator.clipboard?.writeText(generatedCredential) }}>复制</Button>}
+        <Button variant="outline" size="sm" onClick={() => { void loadCredential() }}>生成凭据</Button>
+        <Button variant="outline" size="sm" onClick={() => { void serverOperation(server.credentialEnabled === false ? 'enable-credential' : 'disable-credential').then(() => loadServer().then((value) => { if (value !== undefined) setServer(value) })) }}>{server.credentialEnabled === false ? '启用凭据' : '禁用凭据'}</Button>
+      </div>
+    </section>
+  )
+
+  const remotePanel = (
+    <section className={css.panel} aria-labelledby="hub-client-heading">
+      <div className={css.panelHeader}>
+        <div>
+          <h4 id="hub-client-heading" className={css.panelTitle}>连接远程 Hub</h4>
+          <p className={css.panelHint}>粘贴远程端点生成的凭据，连接后再选择要显示的项目。</p>
+        </div>
+      </div>
+      {state.kind === 'unavailable' && <><p className={css.emptyText}>{t('notConfigured')}</p><p className={css.emptyHint}>{t('notConfiguredHint')}</p></>}
+      <div className={css.formRow}>
+        <label className={css.field}>
+          <span className={css.fieldLabel}>Hub 连接凭据</span>
+          <input className={css.input} aria-label="Hub 连接凭据" value={connectionCredential} placeholder="粘贴 dshhub:v1:..." onChange={(event) => { setConnectionCredential(event.target.value) }} />
+        </label>
+        <Button variant="outline" size="sm" onClick={addEndpoint} disabled={!connectionCredential.trim()}>连接</Button>
+      </div>
+      {endpoints.length > 0 && <div className={css.endpointList}>
+        {endpoints.map(endpoint => (
+          <div className={css.endpoint} key={endpoint.id}>
+            <div className={css.endpointMain}>
+              <span className={css.endpointName}>{endpoint.label}</span>
+              <code className={css.mono}>{endpoint.uri}</code>
+            </div>
+            <span className={`${css.badge} ${endpoint.status === 'connected' ? css.badgeSuccess : css.badgeMuted}`}>{endpoint.status}</span>
+            <Button variant="outline" size="sm" onClick={() => { void endpointOperation(endpoint.enabled ? 'disconnect' : 'connect', { id: endpoint.id }).then(refreshEndpoints) }}>{endpoint.enabled ? '断开' : '连接'}</Button>
+            <Button variant="outline" size="sm" onClick={() => { void endpointOperation('delete', { id: endpoint.id }).then(refreshEndpoints) }}>删除</Button>
+          </div>
+        ))}
+      </div>}
+    </section>
+  )
+
+  // Unavailable: both plugins are loaded; no remote endpoint has been added yet.
   if (state.kind === 'unavailable') {
     return (
       <div className={css.section}>
         <h3 className={css.heading}>{t('title')}</h3>
-        <div className={css.card}>
-          <p className={css.emptyText}>{t('notConfigured')}</p>
-          <p className={css.emptyHint}>{t('notConfiguredHint')}</p>
-        </div>
+        {serverPanel}
+        {remotePanel}
       </div>
     )
   }
@@ -162,14 +275,8 @@ export function HubSection({ t, loadStatus, loadWorkspaces, reconnect, listEndpo
     return (
       <div className={css.section}>
         <h3 className={css.heading}>{t('title')}</h3>
-        <div className={css.card}>
-          <div className={css.row}>
-            <span className={statusDotClass()} />
-            <span className={css.errorText}>{t('error')}</span>
-          </div>
-          <p className={css.errorDetail}>{state.message}</p>
-          <Button variant="outline" size="sm" onClick={fetchStatus}>{t('retry')}</Button>
-        </div>
+        {serverPanel}
+        <section className={css.panel}><div className={css.row}><span className={statusDotClass()} /><span className={css.errorText}>{t('error')}</span></div><p className={css.errorDetail}>{state.message}</p><Button variant="outline" size="sm" onClick={fetchStatus}>{t('retry')}</Button></section>
       </div>
     )
   }
@@ -179,28 +286,9 @@ export function HubSection({ t, loadStatus, loadWorkspaces, reconnect, listEndpo
   return (
     <div className={css.section}>
       <h3 className={css.heading}>{t('title')}</h3>
+      {serverPanel}
+      {remotePanel}
       <div className={css.card}>
-        <div className={css.workspaceList}>
-          <span className={css.label}>Hub 节点</span>
-          {endpoints.map(endpoint => (
-            <div className={css.row} key={endpoint.id}>
-              <span className={css.label}>{endpoint.label}</span>
-              <code className={css.mono}>{endpoint.uri}</code>
-              <span className={css.value}>{endpoint.status}</span>
-              <Button variant="outline" size="sm" onClick={() => { void endpointOperation(endpoint.enabled ? 'disconnect' : 'connect', { id: endpoint.id }).then(refreshEndpoints) }}>
-                {endpoint.enabled ? '断开' : '连接'}
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => { void endpointOperation('delete', { id: endpoint.id }).then(refreshEndpoints) }}>删除</Button>
-            </div>
-          ))}
-          <div className={css.row}>
-            <input aria-label="Hub 节点 ID" value={newEndpoint.id} placeholder="节点 ID" onChange={(event) => { setNewEndpoint({ ...newEndpoint, id: event.target.value }) }} />
-            <input aria-label="Hub 节点名称" value={newEndpoint.label} placeholder="名称" onChange={(event) => { setNewEndpoint({ ...newEndpoint, label: event.target.value }) }} />
-            <input aria-label="Hub 地址" value={newEndpoint.uri} placeholder="ws://host:8765/hub" onChange={(event) => { setNewEndpoint({ ...newEndpoint, uri: event.target.value }) }} />
-            <input aria-label="凭据引用" value={newEndpoint.credentialRef} placeholder="凭据引用" onChange={(event) => { setNewEndpoint({ ...newEndpoint, credentialRef: event.target.value }) }} />
-            <Button variant="outline" size="sm" onClick={addEndpoint}>添加</Button>
-          </div>
-        </div>
         {/* Connection status */}
         <div className={css.row}>
           <span className={statusDotClass()} />
@@ -209,12 +297,6 @@ export function HubSection({ t, loadStatus, loadWorkspaces, reconnect, listEndpo
             {t(STATUS_LABEL[status.status])}
           </span>
           <Button variant="outline" size="sm" onClick={fetchStatus}>{t('retry')}</Button>
-        </div>
-
-        {/* Server URI */}
-        <div className={css.row}>
-          <span className={css.label}>{t('uri')}</span>
-          <code className={css.mono}>{status.uri}</code>
         </div>
 
         {/* Server info (only when connected) */}
@@ -251,21 +333,4 @@ export function HubSection({ t, loadStatus, loadWorkspaces, reconnect, listEndpo
       </div>
     </div>
   )
-}
-
-const SELECTED_WORKSPACES_KEY = 'dsh.remote.selected-workspaces'
-
-function readSelectedWorkspaceRefs(): HubWorkspaceRef[] {
-  try {
-    const value: unknown = JSON.parse(globalThis.localStorage.getItem(SELECTED_WORKSPACES_KEY) ?? '[]')
-    return Array.isArray(value) && value.every(item => isWorkspaceRef(item)) ? value : []
-  } catch {
-    return []
-  }
-}
-
-function isWorkspaceRef(value: unknown): value is HubWorkspaceRef {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    && typeof (value as Record<string, unknown>).endpointId === 'string'
-    && typeof (value as Record<string, unknown>).workspaceId === 'string'
 }

@@ -9,6 +9,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import { RemoteSessionProvider } from './remote-session-provider.ts'
 import { HubConnectionManager, HubConnectionSettingsSchema, HUB_CONNECTIONS_NS, type HubEndpointConfig } from './connection-manager.ts'
+import { importHubConnectionCredential } from './credential-import.ts'
 export { RemoteSessionProvider, HubConnectionError } from './remote-session-provider.ts'
 export { HubEndpointAgent } from './endpoint-agent.ts'
 export type { HubEndpointAgentConfig } from './endpoint-agent.ts'
@@ -16,6 +17,7 @@ export { HubWorkspaceDirectoryProvider } from './workspace-directory.ts'
 export type { HubWorkspaceDirectory, HubWorkspaceDirectoryEntry } from './workspace-directory.ts'
 export type { RemoteHubConfig } from './remote-session-provider.ts'
 export { HubConnectionManager, HubConnectionSettingsSchema, HUB_CONNECTIONS_NS } from './connection-manager.ts'
+export { importHubConnectionCredential } from './credential-import.ts'
 export type { HubEndpointConfig, HubEndpointState, HubConnectionSettings } from './connection-manager.ts'
 
 export const name = 'hub-client'
@@ -35,7 +37,7 @@ export interface HubClientConfig {
 
 /** Cordis schema for the hub client configuration. */
 export const Config: Schema<HubClientConfig> = Schema.object({
-  uri: Schema.string().required().description('WebSocket URI of the remote hub server'),
+  uri: Schema.string().default('').description('WebSocket URI of the remote hub server'),
   token: Schema.string().default('').description('Optional authentication token'),
   autoConnect: Schema.boolean().default(true).description('Auto-connect on plugin load'),
   reconnectDelay: Schema.number().default(3000).description('Delay between failed connection attempts'),
@@ -79,17 +81,20 @@ export function apply(ctx: Context, config: HubClientConfig): void {
             const method = request.method ?? 'GET'
             if (method === 'GET') {
               response.writeHead(200, { 'Content-Type': 'application/json' })
-              response.end(JSON.stringify({ endpoints: manager.list() }))
+              response.end(JSON.stringify({ endpoints: manager.list(), selectedWorkspaces: manager.selectedWorkspaces() }))
               return
             }
             const operation = body.operation
             let result: unknown
-            if (operation === 'create') result = await manager.create(body.config as HubEndpointConfig)
+            if (operation === 'import-credential') result = await importHubConnectionCredential(manager, String(body.credential))
+            else if (operation === 'create') result = await manager.create(body.config as HubEndpointConfig)
             else if (operation === 'update') result = await manager.update(String(body.id), body.patch as Partial<HubEndpointConfig>)
             else if (operation === 'delete') result = await manager.delete(String(body.id))
             else if (operation === 'connect') result = await manager.connect(String(body.id))
             else if (operation === 'disconnect') result = manager.disconnect(String(body.id))
             else if (operation === 'test') result = await manager.test(body.config as HubEndpointConfig)
+            else if (operation === 'selected-workspaces') result = manager.selectedWorkspaces()
+            else if (operation === 'set-selected-workspaces') result = await manager.setSelectedWorkspaces(body.workspaces as import('@deepseek-ai/dsh-hub-protocol').HubWorkspaceRef[])
             else throw new Error('unknown hub endpoint operation')
             response.writeHead(200, { 'Content-Type': 'application/json' })
             response.end(JSON.stringify({ result }))
@@ -227,7 +232,7 @@ export function apply(ctx: Context, config: HubClientConfig): void {
   }
 
   // Auto-connect if configured.
-  if (config.autoConnect) {
+  if (config.autoConnect && config.uri !== '') {
     ctx.effect(() => {
       let disposed = false
       let retryTimer: ReturnType<typeof setTimeout> | undefined

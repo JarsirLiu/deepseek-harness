@@ -3,6 +3,7 @@ import Schema from '@deepseek-ai/schemastery'
 import { credentialRef, type CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { settingsNamespace, type SettingsScope } from '@deepseek-ai/dsh-settings'
 import { RemoteSessionProvider, type RemoteHubConfig } from './remote-session-provider.ts'
+import type { HubWorkspaceRef } from '@deepseek-ai/dsh-hub-protocol'
 
 /** Persisted connection entry. Secrets are referenced, never stored here. */
 export interface HubEndpointConfig {
@@ -16,6 +17,7 @@ export interface HubEndpointConfig {
 /** Persisted Hub client configuration. */
 export interface HubConnectionSettings {
   endpoints: HubEndpointConfig[]
+  selectedWorkspaces: HubWorkspaceRef[]
 }
 
 /** Public state exposed to the Web settings surface. */
@@ -36,6 +38,7 @@ export const HubConnectionSettingsSchema: Schema<HubConnectionSettings> = Schema
     credentialRef: Schema.string().default(''),
     enabled: Schema.boolean().default(true),
   })).default([]),
+  selectedWorkspaces: Schema.array(Schema.object({ endpointId: Schema.string().required() as Schema<`remote:${string}`>, workspaceId: Schema.string().required() })).default([]),
 })
 
 interface ManagedEndpoint {
@@ -69,6 +72,17 @@ export class HubConnectionManager {
         : { endpointId: entry.provider.connectedServerInfo.endpointId }),
       ...(entry.error === undefined ? {} : { error: entry.error }),
     }))
+  }
+
+  /** Return endpoint-qualified homepage workspace selections. */
+  selectedWorkspaces(): HubWorkspaceRef[] { return [...this.settings.get().selectedWorkspaces] }
+
+  /** Persist endpoint-qualified homepage workspace selections. */
+  async setSelectedWorkspaces(value: HubWorkspaceRef[]): Promise<void> { await this.settings.update({ selectedWorkspaces: value }) }
+
+  /** Store an imported endpoint token through the credential provider. */
+  async storeCredential(ref: CredentialRef, value: string): Promise<void> {
+    await this.ctx.credentials.set(ref, value)
   }
 
   /** Add an endpoint and optionally connect it. */

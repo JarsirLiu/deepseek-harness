@@ -12,7 +12,7 @@ import type { RpcResult, SessionId } from '@deepseek-ai/dsh-api-remotes/client'
 import { createRemoteSessionTransport, REMOTE_SESSION_REGISTRY, REMOTE_WORKSPACE_SOURCE, RemoteSessionTransportRegistry, type RemoteWorkspace, type RemoteWorkspaceSource } from '@deepseek-ai/dsh-hub-web-adapter'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import { HubSection, type HubStatusResult, type HubEndpointState } from './HubSection.tsx'
+import { HubSection, type HubStatusResult, type HubEndpointState, type HubServerState } from './HubSection.tsx'
 import { en, zh, type HubLocaleKey } from './locales.ts'
 
 export type { HubSectionProps } from './HubSection.tsx'
@@ -34,9 +34,27 @@ export const inject = ['slots', 'locale', 'sessions']
 /** Load the Hub status response through the host web endpoint. */
 async function loadHubStatus(): Promise<HubStatusResult> {
   const response = await globalThis.fetch('/api/hub/status', { credentials: 'same-origin' })
-  if (response.status === 404) return { kind: 'unavailable' }
+  if (response.status === 404) {
+    const server = await globalThis.fetch('/api/hub/server', { credentials: 'same-origin' })
+    if (server.status === 404) return { kind: 'unavailable' }
+    if (!server.ok) throw new Error(`HTTP ${server.status}`)
+    const value = await server.json() as { host?: string; port?: number }
+    return {
+      kind: 'ready',
+      status: {
+        endpointId: null,
+        status: 'disconnected',
+        isConnected: false,
+        uri: `ws://${value.host ?? '127.0.0.1'}:${value.port ?? 8765}/hub`,
+        serverInfo: null,
+      },
+    }
+  }
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   const status = await response.json() as HubStatusResponse
+  // An installed client with no configured endpoint is a normal empty state.
+  // Keep it distinct from a configured endpoint that failed to connect.
+  if (status.uri === '' && status.endpointId === null) return { kind: 'unavailable' }
   return { kind: 'ready', status }
 }
 
@@ -61,7 +79,7 @@ export function apply(ctx: ClientContext): void {
 
   const remoteWorkspaceSource: RemoteWorkspaceSource = {
     listSelected: async () => {
-      const selected = readSelectedWorkspaceRefs()
+      const selected = await globalThis.fetch('/api/hub/endpoints', { credentials: 'same-origin' }).then(response => response.json() as Promise<{ selectedWorkspaces?: HubWorkspaceRef[] }>).then(value => value.selectedWorkspaces ?? [])
       const result = await rpc<HubWorkspaceListResult>('hub/workspaces', { workspaces: selected })
       await rpc('hub/subscribe-workspaces', { workspaces: selected })
       const connectedEndpointId = result.endpointId
@@ -140,7 +158,7 @@ export function apply(ctx: ClientContext): void {
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
         return (await response.json() as { endpoints: HubEndpointState[] }).endpoints
       },
-      endpointOperation: async (operation: string, body: Record<string, unknown>): Promise<void> => {
+      endpointOperation: async (operation: string, body: Record<string, unknown>): Promise<unknown> => {
         const response = await globalThis.fetch('/api/hub/endpoints', {
           method: 'POST',
           credentials: 'same-origin',
@@ -148,9 +166,31 @@ export function apply(ctx: ClientContext): void {
           body: JSON.stringify({ operation, ...body }),
         })
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        return await response.json() as unknown
+      },
+      loadServer: async (): Promise<HubServerState | undefined> => {
+        const response = await globalThis.fetch('/api/hub/server', { credentials: 'same-origin' })
+        if (response.status === 404) return undefined
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        return await response.json() as HubServerState
+      },
+      serverOperation: async (operation: string, body: Record<string, unknown> = {}): Promise<unknown> => {
+        const response = await globalThis.fetch('/api/hub/server', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ operation, ...body }) })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        return await response.json() as unknown
+      },
+      loadSelectedWorkspaces: async (): Promise<HubWorkspaceRef[]> => {
+        const response = await globalThis.fetch('/api/hub/endpoints', { credentials: 'same-origin' })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        return (await response.json() as { selectedWorkspaces?: HubWorkspaceRef[] }).selectedWorkspaces ?? []
+      },
+      saveSelectedWorkspaces: async (workspaces: HubWorkspaceRef[]): Promise<void> => {
+        const response = await globalThis.fetch('/api/hub/endpoints', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ operation: 'set-selected-workspaces', workspaces }) })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
       },
       loadWorkspaces: async () => {
-        return await rpc<HubWorkspaceListResult>('hub/workspaces', {})
+        const selected = await globalThis.fetch('/api/hub/endpoints', { credentials: 'same-origin' }).then(response => response.json() as Promise<{ selectedWorkspaces?: HubWorkspaceRef[] }>).then(value => value.selectedWorkspaces ?? [])
+        return await rpc<HubWorkspaceListResult>('hub/workspaces', { workspaces: selected })
       },
     }),
   }, HubSection))
@@ -165,19 +205,4 @@ async function rpc<T>(method: string, params: Record<string, unknown>): Promise<
   })
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   return await response.json() as T
-}
-
-function readSelectedWorkspaceRefs(): HubWorkspaceRef[] {
-  try {
-    const value: unknown = JSON.parse(globalThis.localStorage.getItem('dsh.remote.selected-workspaces') ?? '[]')
-    return Array.isArray(value) && value.every(item => isWorkspaceRef(item)) ? value : []
-  } catch {
-    return []
-  }
-}
-
-function isWorkspaceRef(value: unknown): value is HubWorkspaceRef {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    && typeof (value as Record<string, unknown>).endpointId === 'string'
-    && typeof (value as Record<string, unknown>).workspaceId === 'string'
 }

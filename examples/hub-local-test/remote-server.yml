@@ -12,3 +12,10 @@
     # Optional: map the remote workspace id to a preset owned by this device.
     # workspacePresets:
     #   '<remote-workspace-id>': standard
+
+- id: hub-client
+  disabled: false
+  config:
+    uri: ''
+    token: ''
+    autoConnect: false

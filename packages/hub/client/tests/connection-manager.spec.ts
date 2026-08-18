@@ -20,11 +20,13 @@ const { HubConnectionManager } = await import('../src/connection-manager.ts')
 
 type EndpointInput = { id: string; label: string; uri: string; credentialRef?: string; enabled: boolean }
 
-function setup(initial: { endpoints: EndpointInput[] } = { endpoints: [] }) {
+function setup(initial: { endpoints: EndpointInput[]; selectedWorkspaces?: Array<{ endpointId: `remote:${string}`; workspaceId: string }> } = { endpoints: [] }) {
+  initial = { selectedWorkspaces: [], ...initial }
   let value = initial
   let watcher: ((next: typeof value) => void) | undefined
   const settings = {
     get: () => value,
+    update: vi.fn(async (patch: Partial<typeof value>) => { value = { ...value, ...patch }; watcher?.(value) }),
     replace: vi.fn(async (next: typeof value) => { value = next; watcher?.(next) }),
     watch: vi.fn((callback: typeof watcher) => { watcher = callback; return () => { watcher = undefined } }),
   }
@@ -72,5 +74,22 @@ describe('HubConnectionManager', () => {
     const { manager } = setup()
     await manager.create({ id: 'secure', label: 'Secure', uri: 'secure', credentialRef: 'HUB_TOKEN', enabled: false })
     expect(JSON.stringify(manager.list())).not.toContain('secret')
+  })
+
+  it('persists endpoint-qualified workspace selections independently of endpoints', async () => {
+    const { manager, settings } = setup({
+      endpoints: [],
+      selectedWorkspaces: [{ endpointId: 'remote:first', workspaceId: 'same-name' }],
+    })
+    expect(manager.selectedWorkspaces()).toEqual([{ endpointId: 'remote:first', workspaceId: 'same-name' }])
+    await manager.setSelectedWorkspaces([
+      { endpointId: 'remote:first', workspaceId: 'same-name' },
+      { endpointId: 'remote:second', workspaceId: 'same-name' },
+    ])
+    expect(settings.replace).not.toHaveBeenCalled()
+    expect(settings.get().selectedWorkspaces).toEqual([
+      { endpointId: 'remote:first', workspaceId: 'same-name' },
+      { endpointId: 'remote:second', workspaceId: 'same-name' },
+    ])
   })
 })
