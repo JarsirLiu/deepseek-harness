@@ -8,15 +8,18 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import { RemoteSessionProvider } from './remote-session-provider.ts'
+import { HubConnectionManager, HubConnectionSettingsSchema, HUB_CONNECTIONS_NS, type HubEndpointConfig } from './connection-manager.ts'
 export { RemoteSessionProvider, HubConnectionError } from './remote-session-provider.ts'
 export { HubEndpointAgent } from './endpoint-agent.ts'
 export type { HubEndpointAgentConfig } from './endpoint-agent.ts'
 export { HubWorkspaceDirectoryProvider } from './workspace-directory.ts'
 export type { HubWorkspaceDirectory, HubWorkspaceDirectoryEntry } from './workspace-directory.ts'
 export type { RemoteHubConfig } from './remote-session-provider.ts'
+export { HubConnectionManager, HubConnectionSettingsSchema, HUB_CONNECTIONS_NS } from './connection-manager.ts'
+export type { HubEndpointConfig, HubEndpointState, HubConnectionSettings } from './connection-manager.ts'
 
 export const name = 'hub-client'
-export const inject = ['sessions', 'webServer']
+export const inject = ['sessions', 'webServer', 'settings', 'credentials']
 
 /** Configuration for a remote hub connection. */
 export interface HubClientConfig {
@@ -46,6 +49,9 @@ export const Config: Schema<HubClientConfig> = Schema.object({
  * @param config - Plugin configuration.
  */
 export function apply(ctx: Context, config: HubClientConfig): void {
+  const settings = ctx.settings.register(HUB_CONNECTIONS_NS, HubConnectionSettingsSchema)
+  const manager = new HubConnectionManager(ctx, settings)
+  ctx.provide('hubConnectionManager', manager)
   const provider = new RemoteSessionProvider(ctx, {
     uri: config.uri,
     ...(config.token ? { token: config.token } : {}),
@@ -59,6 +65,43 @@ export function apply(ctx: Context, config: HubClientConfig): void {
     | { register: (route: { kind: string; path: string; handler: (req: unknown, res: unknown) => void }) => () => void }
     | undefined
   if (webServer !== undefined) {
+    const endpointApiDispose = webServer.register({
+      kind: 'exact',
+      path: '/api/hub/endpoints',
+      handler: (req: unknown, res: unknown) => {
+        const request = req as { method?: string; on: (event: string, listener: (chunk: Buffer) => void) => void }
+        const response = res as { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void }
+        const chunks: Buffer[] = []
+        request.on('data', chunk => chunks.push(chunk))
+        request.on('end', () => { void (async () => {
+          try {
+            const body = chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
+            const method = request.method ?? 'GET'
+            if (method === 'GET') {
+              response.writeHead(200, { 'Content-Type': 'application/json' })
+              response.end(JSON.stringify({ endpoints: manager.list() }))
+              return
+            }
+            const operation = body.operation
+            let result: unknown
+            if (operation === 'create') result = await manager.create(body.config as HubEndpointConfig)
+            else if (operation === 'update') result = await manager.update(String(body.id), body.patch as Partial<HubEndpointConfig>)
+            else if (operation === 'delete') result = await manager.delete(String(body.id))
+            else if (operation === 'connect') result = await manager.connect(String(body.id))
+            else if (operation === 'disconnect') result = manager.disconnect(String(body.id))
+            else if (operation === 'test') result = await manager.test(body.config as HubEndpointConfig)
+            else throw new Error('unknown hub endpoint operation')
+            response.writeHead(200, { 'Content-Type': 'application/json' })
+            response.end(JSON.stringify({ result }))
+          } catch (error) {
+            response.writeHead(400, { 'Content-Type': 'application/json' })
+            response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
+          }
+        })() })
+      },
+    })
+    ctx.effect(() => endpointApiDispose, 'hub-client.webServer.endpoints')
+
     const rpcDispose = webServer.register({
       kind: 'exact',
       path: '/api/hub/rpc',

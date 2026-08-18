@@ -12,7 +12,7 @@ import type { RpcResult, SessionId } from '@deepseek-ai/dsh-api-remotes/client'
 import { createRemoteSessionTransport, REMOTE_SESSION_REGISTRY, REMOTE_WORKSPACE_SOURCE, RemoteSessionTransportRegistry, type RemoteWorkspace, type RemoteWorkspaceSource } from '@deepseek-ai/dsh-hub-web-adapter'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import { HubSection, type HubStatusResult } from './HubSection.tsx'
+import { HubSection, type HubStatusResult, type HubEndpointState } from './HubSection.tsx'
 import { en, zh, type HubLocaleKey } from './locales.ts'
 
 export type { HubSectionProps } from './HubSection.tsx'
@@ -133,6 +133,20 @@ export function apply(ctx: ClientContext): void {
       loadStatus: loadHubStatus,
       reconnect: async () => {
         const response = await globalThis.fetch('/api/hub/reconnect', { credentials: 'same-origin' })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      },
+      listEndpoints: async (): Promise<HubEndpointState[]> => {
+        const response = await globalThis.fetch('/api/hub/endpoints', { credentials: 'same-origin' })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        return (await response.json() as { endpoints: HubEndpointState[] }).endpoints
+      },
+      endpointOperation: async (operation: string, body: Record<string, unknown>): Promise<void> => {
+        const response = await globalThis.fetch('/api/hub/endpoints', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ operation, ...body }),
+        })
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
       },
       loadWorkspaces: async () => {

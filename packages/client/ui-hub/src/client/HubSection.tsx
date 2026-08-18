@@ -24,6 +24,22 @@ export interface HubSectionInjected {
   loadWorkspaces: () => Promise<HubWorkspaceListResult>
   /** Reconnect the host Hub client and wait for the connection attempt. */
   reconnect: () => Promise<void>
+  /** List configured Hub endpoints without exposing credentials. */
+  listEndpoints: () => Promise<HubEndpointState[]>
+  /** Apply one endpoint management operation through the Host. */
+  endpointOperation: (operation: string, body: Record<string, unknown>) => Promise<void>
+}
+
+/** Redacted endpoint state returned by the Host connection manager. */
+export interface HubEndpointState {
+  id: string
+  label: string
+  uri: string
+  credentialRef?: string
+  enabled: boolean
+  status: string
+  endpointId?: string
+  error?: string
 }
 
 /** View state for the section. */
@@ -56,11 +72,27 @@ const STATUS_DOT_CLASS: Record<HubStatusResponse['status'], string> = {
  * @param props - section owner props and localized copy.
  * @returns the section element tree.
  */
-export function HubSection({ t, loadStatus, loadWorkspaces, reconnect }: HubSectionProps): ReactNode {
+export function HubSection({ t, loadStatus, loadWorkspaces, reconnect, listEndpoints, endpointOperation }: HubSectionProps): ReactNode {
   const [state, setState] = useState<ViewState>({ kind: 'loading' })
   const [workspaces, setWorkspaces] = useState<HubWorkspaceEntry[]>([])
   const [selectedRefs, setSelectedRefs] = useState<HubWorkspaceRef[]>(() => readSelectedWorkspaceRefs())
   const [workspacesVersion, setWorkspacesVersion] = useState(0)
+  const [endpoints, setEndpoints] = useState<HubEndpointState[]>([])
+  const [newEndpoint, setNewEndpoint] = useState({ id: '', label: '', uri: '', credentialRef: '' })
+
+  const refreshEndpoints = useCallback(() => {
+    void listEndpoints().then(setEndpoints).catch(() => setEndpoints([]))
+  }, [listEndpoints])
+
+  useEffect(() => { refreshEndpoints() }, [refreshEndpoints])
+
+  const addEndpoint = (): void => {
+    if (!newEndpoint.id || !newEndpoint.uri) return
+    void endpointOperation('create', { config: { ...newEndpoint, label: newEndpoint.label || newEndpoint.id, enabled: true } }).then(() => {
+      setNewEndpoint({ id: '', label: '', uri: '', credentialRef: '' })
+      refreshEndpoints()
+    })
+  }
 
   const toggleWorkspace = (workspace: HubWorkspaceEntry): void => {
     const ref = { endpointId: workspace.endpointId, workspaceId: workspace.id } satisfies HubWorkspaceRef
@@ -148,6 +180,27 @@ export function HubSection({ t, loadStatus, loadWorkspaces, reconnect }: HubSect
     <div className={css.section}>
       <h3 className={css.heading}>{t('title')}</h3>
       <div className={css.card}>
+        <div className={css.workspaceList}>
+          <span className={css.label}>Hub 节点</span>
+          {endpoints.map(endpoint => (
+            <div className={css.row} key={endpoint.id}>
+              <span className={css.label}>{endpoint.label}</span>
+              <code className={css.mono}>{endpoint.uri}</code>
+              <span className={css.value}>{endpoint.status}</span>
+              <Button variant="outline" size="sm" onClick={() => { void endpointOperation(endpoint.enabled ? 'disconnect' : 'connect', { id: endpoint.id }).then(refreshEndpoints) }}>
+                {endpoint.enabled ? '断开' : '连接'}
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => { void endpointOperation('delete', { id: endpoint.id }).then(refreshEndpoints) }}>删除</Button>
+            </div>
+          ))}
+          <div className={css.row}>
+            <input aria-label="Hub 节点 ID" value={newEndpoint.id} placeholder="节点 ID" onChange={(event) => { setNewEndpoint({ ...newEndpoint, id: event.target.value }) }} />
+            <input aria-label="Hub 节点名称" value={newEndpoint.label} placeholder="名称" onChange={(event) => { setNewEndpoint({ ...newEndpoint, label: event.target.value }) }} />
+            <input aria-label="Hub 地址" value={newEndpoint.uri} placeholder="ws://host:8765/hub" onChange={(event) => { setNewEndpoint({ ...newEndpoint, uri: event.target.value }) }} />
+            <input aria-label="凭据引用" value={newEndpoint.credentialRef} placeholder="凭据引用" onChange={(event) => { setNewEndpoint({ ...newEndpoint, credentialRef: event.target.value }) }} />
+            <Button variant="outline" size="sm" onClick={addEndpoint}>添加</Button>
+          </div>
+        </div>
         {/* Connection status */}
         <div className={css.row}>
           <span className={statusDotClass()} />
