@@ -6,13 +6,14 @@ This directory simulates two devices: run `remote-server.yml` on the remote devi
 
 The repository source cannot currently be installed into the default Web profile with `dsh plugin add file:...`. The default profile is an independent pnpm workspace under the user directory, while the Hub packages depend on repository-local `workspace:^` packages. Until the packages are published or a repository development profile is provided, the install command fails.
 
-The commands below therefore document the target flow and cannot be run directly before the development profile is available.
+The commands below therefore document the target flow and cannot be run directly before the development profile is available. Each process sets a different `DSH_HOME`, so profiles, settings, and persisted sessions remain isolated.
 
 Open two terminals at the repository root.
 
 Remote device:
 
 ```powershell
+$env:DSH_HOME = Join-Path (Get-Location) '.tmp\hub-local-test\remote'
 pnpm dsh web --patch .\examples\hub-local-test\remote-server.yml --port 3081
 ```
 
@@ -21,6 +22,7 @@ Open `http://127.0.0.1:3081` and select the project directory to expose on the w
 Local device:
 
 ```powershell
+$env:DSH_HOME = Join-Path (Get-Location) '.tmp\hub-local-test\local'
 pnpm dsh web --patch .\examples\hub-local-test\local-client.yml --port 3080
 ```
 

@@ -227,11 +227,17 @@ export class RemoteSessionProvider {
    */
   onEvent(listener: (notification: HubEventNotification) => void): () => void {
     const listeners = this.eventListeners.get('*') ?? new Set()
+    const wasEmpty = listeners.size === 0
     this.eventListeners.set('*', listeners)
     listeners.add(listener)
+    if (wasEmpty) void this.request('hub/subscribe', {})
     return () => {
-      listeners.delete(listener)
-      if (listeners.size === 0) this.eventListeners.delete('*')
+      if (!listeners.delete(listener) || listeners.size !== 0) return
+      this.eventListeners.delete('*')
+      // The Hub has one wildcard unsubscribe operation. Keep it active while
+      // a session-specific listener still needs the same connection-wide feed.
+      if ([...this.eventListeners].some(([key, value]) => key !== '*' && value.size !== 0)) return
+      void this.request('hub/unsubscribe', {})
     }
   }
 

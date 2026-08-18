@@ -6,13 +6,14 @@
 
 当前仓库源码不能直接通过 `dsh plugin add file:...` 安装到默认 Web profile。默认 profile 位于用户目录下的独立 pnpm workspace，而 Hub 包依赖仓库内的 `workspace:^` 包；在插件发布或提供仓库内开发 profile 前，执行该安装命令会失败。
 
-因此下面的启动命令暂时只作为目标流程记录，不能在未完成开发 profile 前直接运行。
+因此下面的启动命令暂时只作为目标流程记录，不能在未完成开发 profile 前直接运行。每个进程设置不同的 `DSH_HOME`，从而隔离 profile、设置和持久化会话数据。
 
 在仓库根目录分别打开两个终端。
 
 远程端：
 
 ```powershell
+$env:DSH_HOME = Join-Path (Get-Location) '.tmp\hub-local-test\remote'
 pnpm dsh web --patch .\examples\hub-local-test\remote-server.yml --port 3081
 ```
 
@@ -21,6 +22,7 @@ pnpm dsh web --patch .\examples\hub-local-test\remote-server.yml --port 3081
 本地端：
 
 ```powershell
+$env:DSH_HOME = Join-Path (Get-Location) '.tmp\hub-local-test\local'
 pnpm dsh web --patch .\examples\hub-local-test\local-client.yml --port 3080
 ```
 

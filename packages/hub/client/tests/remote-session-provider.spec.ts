@@ -158,6 +158,23 @@ describe('RemoteSessionProvider', () => {
     expect(provider.connectionState).toBe('disconnected')
   })
 
+  it('subscribes the Hub wildcard feed for web event streaming', async () => {
+    const provider = new RemoteSessionProvider({} as never, { uri: 'ws://test' })
+    await provider.connect()
+
+    const disposeWildcard = provider.onEvent(vi.fn())
+    await new Promise(resolve => setTimeout(resolve, 0))
+    let messages = sockets.at(-1)!.sent.map(message => JSON.parse(message) as { method: string; params?: Record<string, unknown> })
+    expect(messages.map(message => message.method)).toEqual(['hub/handshake', 'hub/subscribe'])
+    expect(messages[1]?.params).toEqual({})
+
+    disposeWildcard()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    messages = sockets.at(-1)!.sent.map(message => JSON.parse(message) as { method: string; params?: Record<string, unknown> })
+    expect(messages.map(message => message.method)).toEqual(['hub/handshake', 'hub/subscribe', 'hub/unsubscribe'])
+    expect(messages[2]?.params).toEqual({})
+  })
+
   it('marks the provider disconnected when the socket closes', async () => {
     const provider = new RemoteSessionProvider({} as never, { uri: 'ws://test' })
     await provider.connect()

@@ -24,14 +24,14 @@ const apiProxy = {
   events: {
     mux: async function* (_request: unknown, signal: AbortSignal) {
       if (emitMuxEvent) {
-        await new Promise<void>((resolve) => { setTimeout(resolve, 500) })
+        await new Promise<void>((resolve) => { setTimeout(resolve, 1500) })
         yield { payload: { type: 'session/event', sessionId: 'shared-session', event: { seq: 1, type: 'assistant/chunk', text: 'streamed remote reply' } } }
       }
       await new Promise<void>((resolve) => { signal.addEventListener('abort', () => { resolve() }, { once: true }) })
     },
     host: async function* (_request: unknown, signal: AbortSignal) {
       if (emitHostEvent) {
-        await new Promise<void>((resolve) => { setTimeout(resolve, 500) })
+        await new Promise<void>((resolve) => { setTimeout(resolve, 1500) })
         yield { payload: { type: 'host/session-status', sessionId: 'shared-session', running: true } }
       }
       if (nextWorkspaceId !== undefined) {
