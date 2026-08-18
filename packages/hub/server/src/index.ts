@@ -24,7 +24,6 @@ export const Config: Schema<HubServerConfig> = Schema.object({
   authTokens: Schema.array(Schema.string()).default([]).description('Optional authentication tokens'),
   agentTokens: Schema.dict(Schema.string()).default({}).description('Endpoint identity to registration token'),
   serverName: Schema.string().default('deepseek-harness-hub').description('Server identity name'),
-  workspacePresets: Schema.dict(Schema.string()).default({}).description('Remote agent preset by workspace id'),
 })
 
 /**

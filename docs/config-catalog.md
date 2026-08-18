@@ -846,12 +846,10 @@ export interface HubServerConfig {
   agentTokens?: Record<string, string>
   /** Server identity name. */
   serverName?: string
-  /** Remote preset selected for each published workspace, keyed by workspace id. */
-  workspacePresets?: Record<string, string>
 }
 ```
 
-Source: [`packages/hub/server/src/server.ts:50`](../packages/hub/server/src/server.ts)
+Source: [`packages/hub/server/src/server.ts:62`](../packages/hub/server/src/server.ts)
 
 <a id="deepseek-aidsh-invariants"></a>
 

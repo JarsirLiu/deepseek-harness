@@ -848,8 +848,6 @@ export interface HubServerConfig {
   agentTokens?: Record<string, string>
   /** Server identity name. */
   serverName?: string
-  /** Remote preset selected for each published workspace, keyed by workspace id. */
-  workspacePresets?: Record<string, string>
 }
 ```
 
