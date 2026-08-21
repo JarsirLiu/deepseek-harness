@@ -78,6 +78,28 @@ describe('Hub endpoint identity', () => {
     }))).rejects.toThrow('endpoint authentication failed')
   })
 
+  it('accepts the Hub authentication token for an Agent when no per-Agent token is configured', () => {
+    const server = new HubServer({} as never, {
+      endpointId: 'remote:broker',
+      authTokens: ['shared-secret'],
+    })
+    type TestClient = {
+      authenticated: boolean
+      role: 'client'
+      endpointId: undefined
+      serverInfo?: undefined
+      workspaces?: never[]
+    }
+    const client: TestClient = { authenticated: false, role: 'client', endpointId: undefined }
+    const register = (server as unknown as {
+      handleAgentRegister: (client: TestClient, params: unknown) => unknown
+    }).handleAgentRegister.bind(server)
+    expect(register(client, {
+      endpointId: 'remote:agent', token: 'shared-secret',
+      serverInfo: { name: 'agent', version: '1' }, workspaces: [],
+    })).toEqual({ endpointId: 'remote:agent', brokerInfo: { name: 'deepseek-harness-hub', version: '0.1.0' } })
+  })
+
   it('routes an Agent Host event only to the selected endpoint workspace', () => {
     const server = new HubServer({} as never, { endpointId: 'remote:broker' })
     const agentNotify = vi.fn()

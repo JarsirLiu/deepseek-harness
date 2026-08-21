@@ -49,6 +49,21 @@ describe('HubServerManager', () => {
     expect(manager.get()).not.toHaveProperty('token')
   })
 
+  it('creates the startup credential before the listener begins', async () => {
+    const credentials = {
+      resolve: vi.fn(async () => undefined),
+      set: vi.fn(async () => {}),
+    }
+    let received: unknown
+    const manager = new HubServerManager({ credentials } as never, settings({ ...config, credentialRef: 'HUB_TOKEN' }), (value) => {
+      received = value
+      return fakeServer()
+    })
+    await manager.start()
+    expect(credentials.set).toHaveBeenCalledOnce()
+    expect(received).toMatchObject({ authTokens: [expect.any(String)] })
+  })
+
   it('reports a failed bind and leaves no running server', async () => {
     const server = fakeServer()
     vi.mocked(server.waitUntilListening).mockRejectedValueOnce(new Error('EADDRINUSE'))

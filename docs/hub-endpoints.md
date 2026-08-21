@@ -6,18 +6,18 @@ This reference defines the Hub Broker topology, endpoint registration, discovery
 
 ## Topology
 
-A Hub Broker accepts authenticated Endpoint Agents and Web clients. An Endpoint Agent owns one Harness Host. A Web client may connect to multiple Hub Brokers at the same time.
+A Hub accepts authenticated Endpoint Agents and Clients. An Endpoint Agent owns one Harness Host. Any Harness node may run the Hub, Agent, and Client roles at the same time. A Client may connect to multiple Hubs at the same time.
 
 ```text
-Hub Broker
+Hub
   ├── Endpoint Agent A
   ├── Endpoint Agent B
-  └── Web client connections
+  └── Client connections
 
-Web client
-  ├── local endpoint
-  ├── remote endpoint A
-  └── remote endpoint B
+Node
+  ├── optional Hub listener
+  ├── optional Endpoint Agent registration
+  └── optional Client connection
 ```
 
 The same Endpoint may use a different Broker without changing its identity or resource ownership:
@@ -34,7 +34,7 @@ An Endpoint Agent registers its endpoint with the Broker and publishes a complet
 
 If the Agent's Hub socket closes unexpectedly, the Agent aborts its Host event stream and clears its registration and directory state. A caller explicitly recovers by calling `connect()` again; that call waits for the old stream to finish, reads a fresh directory snapshot, and registers the new connection. The Agent does not perform background retries.
 
-Any node may run the Broker role alongside its own Host. A single-host deployment remains valid, and a dedicated Broker may run without owning a Host. Multi-endpoint discovery requires the Broker role and an Agent connection from every participating Host. Endpoints reach one another through authorized Host API calls routed by the Broker; the Broker does not provide arbitrary network access between endpoints.
+Any node may run the Hub role alongside its own Host. A single-host deployment remains valid, and a dedicated Hub may run without owning a Host. A node that owns the Hub's local Host resources does not register those resources as an Agent to the same Hub; the Hub publishes its local directory directly. A node that wants its resources visible through another Hub imports that Hub's connection credential and establishes an Agent registration. Endpoints reach one another through authorized Host API calls routed by the Hub; the Hub does not provide arbitrary network access between endpoints.
 
 ## Replaceable Hubs
 
@@ -44,23 +44,19 @@ An Endpoint may connect to one or more Brokers when a deployment requires redund
 
 ## Registration and Authentication
 
-The Broker uses separate credentials for its roles:
+The Hub settings page generates one connection credential for the Hub. The credential contains the Hub URI, Hub identity, and Hub token. A node may use the same credential for both roles: its Client connection authenticates discovery and API requests, while its Endpoint Agent connection registers the node's own Host. The credential is stored through the Host credentials service and is never placed in browser storage.
 
-- **Client credential** authenticates a Web client that wants to discover or use endpoints.
-- **Enrollment credential** is used once by an Endpoint Agent to register a new endpoint.
-- **Endpoint credential** is issued by the Broker and stored by the Agent for later reconnects.
-
-Each Endpoint owns a stable `endpointId`, created locally or assigned by an identity service. Registering with a Broker associates that identity with a Broker-specific connection credential; changing Brokers does not create a new Endpoint identity. An endpoint credential is unique to one Endpoint-to-Broker relationship and is never exposed to the browser. A shared enrollment token is suitable for local development or one-time registration only; it is not a permanent identity for every endpoint.
+The Hub token authorizes the registration handshake, while the registering node supplies its own stable `endpointId`. The Hub identity and every registered Agent identity are distinct. Reusing the Hub's `endpointId`, accepting an endpoint identity from the browser, or deriving an endpoint identity from a label is invalid. Changing Hubs does not change the Agent identity.
 
 Registration follows this sequence:
 
 ```text
-Endpoint Agent -> Broker: register with enrollment credential
-Broker -> Endpoint Agent: endpointId + endpoint credential
-Endpoint Agent -> Broker: reconnect with endpoint credential
-Endpoint Agent -> Broker: publish workspace summaries
-Web client -> Broker: authenticate with client credential
-Web client -> Broker: list authorized endpoints and workspaces
+Hub -> node: connection credential
+Endpoint Agent -> Hub: register(endpointId, token, serverInfo, workspace snapshot)
+Hub -> Client or Agent: authenticated connection
+Endpoint Agent -> Hub: replace workspace snapshot and forward official Host events
+Client -> Hub: list authorized endpoints and workspaces
+Client -> Hub: forward the same Host API requests to the selected endpoint
 ```
 
 The Broker checks the client identity, Endpoint, resource reference, and API method for every forwarded request. Connecting to the Broker does not grant access to every endpoint or workspace. Endpoint identity and connection authorization are separate: a client may authorize the same Endpoint through a different Broker without changing the Endpoint identity.
@@ -87,7 +83,7 @@ The local endpoint uses the normal Host API transport. A remote endpoint uses th
 
 ## Settings Ownership
 
-Remote client settings belong to the client profile:
+Remote Hub connection settings belong to the node profile:
 
 ```yaml
 hub.endpoints:
@@ -96,6 +92,7 @@ hub.endpoints:
     uri: ws://192.168.1.20:8765/hub
     credentialRef: hub-token-office
     enabled: true
+    registerAgent: true
 ```
 
 Hub listener settings belong to the node that runs the Broker:
@@ -109,16 +106,17 @@ hub.server:
   credentialRef: hub-server-token
 ```
 
-Endpoint Agent settings belong to the Host that owns the workspaces and sessions it publishes. Remote connection settings and selected remote workspaces belong to the client profile. Changing the Broker changes connection settings and credentials, not ownership of the published resources.
+`registerAgent: true` makes the node also register its own Host through that Hub. `agentEndpointId` is a node-owned stable identity stored in the same settings namespace. The node may disable Agent registration while retaining its Client connection. Changing the Hub changes the connection and credentials, not ownership of the published resources.
 
 Credentials are stored through the Harness credentials service. Browser local storage stores selected workspace IDs and UI state only; it does not store authentication tokens.
 
 ## Settings Page
 
-The Hub settings page has two sections:
+The Hub settings page has three responsibilities:
 
-- **Remote connections** manages multiple Hub connections, connection tests, enablement, removal, status, and the remote workspaces selected for the home page.
+- **Hub connections** manages multiple Hub connections, connection tests, enablement, removal, status, optional local Agent registration, and the remote workspaces selected for the home page.
 - **This device as Hub** manages the local Hub listener, including enabled state, bind address, port, server name, credentials, lifecycle controls, and the address that other clients can copy.
+- **This device identity** owns the stable `agentEndpointId` used when this node registers its Host with another Hub.
 
 The small computer icon belongs to the remote connection entry in the settings page. It identifies a configured remote endpoint in that settings section. The home page project list does not use this icon as a project marker.
 
@@ -126,13 +124,15 @@ Selecting a remote workspace in settings publishes a filter containing `(endpoin
 
 Remote paths and working directories describe the owning Host and are never treated as local paths. Remote file, process, model, session, and workspace operations execute on the owning Host through its API. The local client does not pass a remote path to a local shell or filesystem provider.
 
-The discovery flow is:
+The discovery and registration flow is:
 
 ```text
-Web client -> list-endpoints
-Web client -> list-workspaces(endpointId)
-Web client -> select (endpointId, workspaceId)
-Web client -> Host API through the selected endpoint
+Hub -> issue connection credential
+Node -> import credential and optionally register its Agent
+Hub -> publish local and registered endpoint directories
+Client -> list-endpoints and list-workspaces
+Client -> select (endpointId, workspaceId)
+Client -> Host API through the selected endpoint
 ```
 
 ## Server Lifecycle

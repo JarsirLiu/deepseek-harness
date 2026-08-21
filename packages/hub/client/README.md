@@ -6,7 +6,7 @@ Cordis plugin that connects to a remote Hub server and exposes its sessions and 
 
 ## Configuration
 
-The plugin profile row owns the remote WebSocket URI and authentication settings. The remote endpoint identity is not configurable on the Client: a successful Hub handshake is its only source. Before that handshake, `/api/hub/status` reports `endpointId: null` and no remote transport is registered. The plugin registers the remote session provider and the `/api/hub/status` web endpoint used by the optional UI package, then disposes the connection with the plugin fiber.
+The plugin persists Hub connections under `hub.endpoints`. Each entry may enable `registerAgent`; that option makes the same Host also register its local directory through an Endpoint Agent. The node's `agentEndpointId` is generated once, persisted in the settings namespace, and is independent of every Hub identity. The remote endpoint identity is not configurable on the Client: a successful Hub handshake is its only source. Before that handshake, `/api/hub/status` reports `endpointId: null` and no remote transport is registered. The plugin registers the remote session provider and the `/api/hub/status` web endpoint used by the optional UI package, then disposes the connection with the plugin fiber.
 
 The package also exports `HubEndpointAgent` for a Host that registers itself with a Hub listener. The Agent requires an explicit endpoint identity, registration token, Host `apiProxy`, and `HubWorkspaceDirectoryProvider`. The provider reads complete `workspace.list` and `session.list` snapshots from that Host; the Agent publishes the snapshot at registration and serially replaces it after workspace or session directory changes.
 

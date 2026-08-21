@@ -5,8 +5,19 @@ const providers: FakeProvider[] = []
 class FakeProvider {
   readonly config: { uri: string; token?: string }
   connectedServerInfo: { endpointId: `remote:${string}` } | null = null
-  connect = vi.fn(async () => { this.connectedServerInfo = { endpointId: `remote:${this.config.uri}` as `remote:${string}` } })
+  private connecting = false
+  get isConnected(): boolean { return this.connectedServerInfo !== null }
+  connect = vi.fn(async () => {
+    if (this.connecting) throw new Error('already connecting')
+    this.connecting = true
+    await Promise.resolve()
+    this.connectedServerInfo = { endpointId: `remote:${this.config.uri}` as `remote:${string}` }
+    this.connecting = false
+  })
   disconnect = vi.fn(() => { this.connectedServerInfo = null })
+  request = vi.fn(async (method: string) => method === 'hub/list-endpoints'
+    ? { endpoints: [{ endpointId: this.connectedServerInfo?.endpointId }] }
+    : { routed: true })
 
   constructor(_ctx: unknown, config: { uri: string; token?: string }) {
     this.config = config
@@ -45,13 +56,23 @@ describe('HubConnectionManager', () => {
     const { manager, settings } = setup()
     const state = await manager.create({ id: 'one', label: 'One', uri: 'first', enabled: false })
 
-    expect(settings.replace).toHaveBeenCalledWith({ endpoints: [{ id: 'one', label: 'One', uri: 'first', enabled: false }] })
+    expect(settings.update).toHaveBeenCalledWith({ endpoints: [{ id: 'one', label: 'One', uri: 'first', enabled: false }] })
     expect(state.status).toBe('disconnected')
     await expect(manager.connect('one')).resolves.toMatchObject({ id: 'one', status: 'connected', endpointId: 'remote:first' })
     manager.disconnect('one')
     expect(manager.list()[0]?.status).toBe('disconnected')
     await manager.delete('one')
     expect(manager.list()).toEqual([])
+  })
+
+  it('serializes startup reconciliation with an endpoint created by settings', async () => {
+    const { manager } = setup()
+    await expect(manager.create({ id: 'one', label: 'One', uri: 'first', enabled: true })).resolves.toMatchObject({
+      id: 'one',
+      status: 'connected',
+      endpointId: 'remote:first',
+    })
+    expect(providers.at(-1)?.connect).toHaveBeenCalledTimes(1)
   })
 
   it('resolves credential references before constructing a provider', async () => {
@@ -91,5 +112,20 @@ describe('HubConnectionManager', () => {
       { endpointId: 'remote:first', workspaceId: 'same-name' },
       { endpointId: 'remote:second', workspaceId: 'same-name' },
     ])
+  })
+
+  it('routes an addressed request through the Hub that advertises its endpoint', async () => {
+    const { manager } = setup()
+    await manager.create({ id: 'one', label: 'One', uri: 'first', enabled: true })
+    await expect(manager.request('hub/api/request', { endpointId: 'remote:first', workspaceId: 'workspace-a' }))
+      .resolves.toEqual({ routed: true })
+    expect(providers.at(-1)?.request).toHaveBeenCalledWith('hub/api/request', { endpointId: 'remote:first', workspaceId: 'workspace-a' })
+  })
+
+  it('requires an explicit endpoint when multiple Hubs are connected', async () => {
+    const { manager } = setup()
+    await manager.create({ id: 'one', label: 'One', uri: 'first', enabled: true })
+    await manager.create({ id: 'two', label: 'Two', uri: 'second', enabled: true })
+    await expect(manager.request('hub/workspaces', {})).rejects.toThrow('multiple Hub connections require an endpointId')
   })
 })

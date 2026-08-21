@@ -6,7 +6,7 @@
 
 ## 配置
 
-插件 profile row 持有远程 WebSocket URI 与认证设置。客户端不能配置远程端点身份；成功的 Hub 握手是身份的唯一来源。握手完成前，`/api/hub/status` 返回 `endpointId: null`，也不会注册远程传输。插件注册远程 session provider，并提供可选 UI 包使用的 `/api/hub/status` Web 端点；插件 fiber 释放时连接一并释放。
+插件通过 `hub.endpoints` 持久化 Hub 连接。每个条目都可以开启 `registerAgent`；开启后，同一个 Host 也会通过 Endpoint Agent 注册本端目录。节点的 `agentEndpointId` 只生成并持久化一次，与所有 Hub 身份相互独立。客户端不能配置远程端点身份；成功的 Hub 握手是身份的唯一来源。握手完成前，`/api/hub/status` 返回 `endpointId: null`，也不会注册远程传输。插件注册远程 session provider，并提供可选 UI 包使用的 `/api/hub/status` Web 端点；插件 fiber 释放时连接一并释放。
 
 本包还导出 `HubEndpointAgent`，供 Host 向 Hub listener 注册自身。Agent 必须使用显式端点身份、注册 token、Host `apiProxy` 和 `HubWorkspaceDirectoryProvider`。该 provider 从本端 Host 的完整 `workspace.list` 与 `session.list` 快照读取目录；Agent 在注册时发布快照，并在工作区或会话目录变化后串行替换已发布目录。
 

@@ -194,6 +194,9 @@ export class RemoteSessionProvider {
     return this.handshakeResult
   }
 
+  /** Token used by the authenticated Hub connection, for a sibling Agent connection. */
+  get connectionToken(): string { return this.config.token }
+
   /**
    * Subscribe to events from a specific session.
    * @param workspaceId - workspace that owns the session.

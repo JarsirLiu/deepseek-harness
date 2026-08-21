@@ -294,8 +294,11 @@ export class HubServer {
   private handleAgentRegister(client: ClientRecord, params: HubAgentRegisterParams): { endpointId: `remote:${string}`; brokerInfo: { name: string; version: string } } {
     if (client.role !== 'client' || client.endpointId !== undefined) throw new Error('connection already registered')
     requireEndpointId(params.endpointId)
-    const expected = this.config.agentTokens[params.endpointId]
-    if (expected === undefined || params.token !== expected) throw new Error('endpoint authentication failed')
+    const endpointToken = this.config.agentTokens[params.endpointId]
+    const tokenAccepted = endpointToken === undefined
+      ? this.config.authTokens.includes(params.token)
+      : params.token === endpointToken
+    if (!tokenAccepted) throw new Error('endpoint authentication failed')
     for (const existing of this.clients.values()) {
       if (existing !== client && existing.role === 'agent' && existing.endpointId === params.endpointId) {
         throw new Error(`endpoint already connected: ${params.endpointId}`)

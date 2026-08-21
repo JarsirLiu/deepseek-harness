@@ -119,7 +119,10 @@ export function apply(ctx: Context, config: HubClientConfig): void {
           try {
             const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { method?: string; params?: Record<string, unknown> }
             if (typeof body.method !== 'string') throw new Error('method is required')
-            const result = await provider.request(body.method, body.params ?? {})
+            const params = body.params ?? {}
+            const result = manager.list().length === 0
+              ? await provider.request(body.method, params)
+              : await manager.request(body.method, params)
             response.writeHead(200, { 'Content-Type': 'application/json' })
             response.end(JSON.stringify(result))
           } catch (error) {
@@ -138,11 +141,13 @@ export function apply(ctx: Context, config: HubClientConfig): void {
         const response = res as { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void }
         response.writeHead(200, { 'Content-Type': 'application/json' })
         const body = {
-          endpointId: provider.connectedServerInfo?.endpointId ?? null,
-          status: provider.connectionState,
-          isConnected: provider.isConnected,
-          uri: config.uri,
-          serverInfo: provider.connectedServerInfo?.serverInfo ?? null,
+          ...(manager.list().length === 0 ? {
+            endpointId: provider.connectedServerInfo?.endpointId ?? null,
+            status: provider.connectionState,
+            isConnected: provider.isConnected,
+            uri: config.uri,
+            serverInfo: provider.connectedServerInfo?.serverInfo ?? null,
+          } : manager.status()),
         }
         response.end(JSON.stringify(body))
       },
@@ -154,8 +159,10 @@ export function apply(ctx: Context, config: HubClientConfig): void {
       handler: (_req: unknown, res: unknown) => { void (async () => {
         const response = res as { writeHead: (code: number, headers: Record<string, string>) => void; end: (body: string) => void }
         try {
-          provider.disconnect()
-          await provider.connect()
+          if (manager.list().length === 0) {
+            provider.disconnect()
+            await provider.connect()
+          } else await manager.reconnect()
           response.writeHead(200, { 'Content-Type': 'application/json' })
           response.end(JSON.stringify({ ok: true }))
         } catch (error) {

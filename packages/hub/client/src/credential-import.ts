@@ -14,6 +14,7 @@ export async function importHubConnectionCredential(manager: HubConnectionManage
     uri: credential.uri,
     credentialRef: credentialRefName,
     enabled: true,
+    registerAgent: true,
   }
   const existing = manager.list().find(entry => entry.id === id)
   if (existing === undefined) await manager.create(config)

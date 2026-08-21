@@ -6,18 +6,18 @@
 
 ## 拓扑
 
-一个 Hub Broker 接受经过认证的 Endpoint Agent 和 Web 客户端。每个 Endpoint Agent 拥有一个 Harness Host。一个 Web 客户端可以同时连接多个 Hub Broker。
+一个 Hub 接受经过认证的 Endpoint Agent 和 Client。每个 Endpoint Agent 拥有一个 Harness Host。任意 Harness 节点都可以同时运行 Hub、Agent 和 Client 角色。一个 Client 可以同时连接多个 Hub。
 
 ```text
-Hub Broker
+Hub
   ├── Endpoint Agent A
   ├── Endpoint Agent B
-  └── Web client connections
+  └── Client connections
 
-Web client
-  ├── local endpoint
-  ├── remote endpoint A
-  └── remote endpoint B
+Node
+  ├── optional Hub listener
+  ├── optional Endpoint Agent registration
+  └── optional Client connection
 ```
 
 同一个 Endpoint 可以改用另一个 Broker，而不改变自身身份或资源所有权：
@@ -34,7 +34,7 @@ Endpoint Agent 向 Broker 注册端点，并从本端 Host 的 `workspace.list` 
 
 如果 Agent 的 Hub socket 意外关闭，Agent 会中止 Host 事件流，并清除注册和目录状态。调用方再次调用 `connect()` 执行显式恢复；该调用会等待旧流结束，重新读取目录快照，并注册新的连接。Agent 不会在后台自动重试。
 
-任意节点都可以在运行自身 Host 的同时承担 Broker 角色。单 Host 部署仍然有效，也可以使用不拥有 Host 的独立 Broker。要实现多端点发现，必须使用 Broker 角色，并让每个参与的 Host 都建立 Agent 连接。端点之间通过 Broker 路由、并受授权控制的 Host API 调用互通；Broker 不提供端点之间的任意网络访问。
+任意节点都可以在运行自身 Host 的同时承担 Hub、Agent 和 Client 角色。拥有 Hub 本地 Host 资源的节点不需要把这些资源重复注册为同一个 Hub 的 Agent；Hub 会直接公布本地工作区目录。希望通过其他 Hub 暴露自身资源的节点，导入该 Hub 的连接凭据并建立 Agent 注册。端点之间通过 Hub 路由、并受授权控制的 Host API 调用互通；Hub 不提供端点之间的任意网络访问。
 
 ## Hub 可替换性
 
@@ -44,23 +44,19 @@ Broker 是可替换的连接设施，不是端点资源的所有者。Endpoint �
 
 ## 注册与认证
 
-Broker 为不同角色使用独立凭据：
+Hub 设置页面为 Hub 生成一份连接凭据。凭据包含 Hub URI、Hub 身份和 Hub token。节点可以用同一份凭据承担两种角色：Client 连接用于认证发现和 API 请求，Endpoint Agent 连接用于注册本节点的 Host。凭据通过 Host 的 credentials service 保存，绝不会写入浏览器存储。
 
-- **客户端凭据**认证想要发现或使用端点的 Web 客户端。
-- **注册凭据**由 Endpoint Agent 首次注册新端点时使用。
-- **端点凭据**由 Broker 签发，并由 Agent 保存用于后续重连。
-
-每个 Endpoint 持有稳定的 `endpointId`，由本地创建或由身份服务分配。向 Broker 注册时，只会把该身份关联到一个特定 Broker 的连接凭据；更换 Broker 不会创建新的 Endpoint 身份。端点凭据只属于一条 Endpoint 到 Broker 的连接关系，不能暴露给浏览器。共享注册 Token 只适合本地开发或一次性注册，不能作为所有端点的永久身份。
+Hub token 授权注册握手，注册节点则提供自己的稳定 `endpointId`。Hub 身份与每个已注册 Agent 身份必须不同。复用 Hub 的 `endpointId`、接受浏览器提供的端点身份，或从标签推导端点身份都不合法。更换 Hub 不会改变 Agent 身份。
 
 注册流程如下：
 
 ```text
-Endpoint Agent -> Broker: register with enrollment credential
-Broker -> Endpoint Agent: endpointId + endpoint credential
-Endpoint Agent -> Broker: reconnect with endpoint credential
-Endpoint Agent -> Broker: publish workspace summaries
-Web client -> Broker: authenticate with client credential
-Web client -> Broker: list authorized endpoints and workspaces
+Hub -> node: connection credential
+Endpoint Agent -> Hub: register(endpointId, token, serverInfo, workspace snapshot)
+Hub -> Client or Agent: authenticated connection
+Endpoint Agent -> Hub: replace workspace snapshot and forward official Host events
+Client -> Hub: list authorized endpoints and workspaces
+Client -> Hub: forward the same Host API requests to the selected endpoint
 ```
 
 Broker 对每个转发请求检查客户端身份、Endpoint、资源引用和 API 方法。连接 Broker 不会自动获得所有端点或工作区的访问权限。Endpoint 身份与连接授权彼此独立：客户端可以通过另一个 Broker 授权访问同一个 Endpoint，而不改变 Endpoint 身份。
@@ -87,7 +83,7 @@ type SessionRef = {
 
 ## 设置归属
 
-远程客户端设置属于客户端 profile：
+远程 Hub 连接设置属于节点 profile：
 
 ```yaml
 hub.endpoints:
@@ -96,6 +92,7 @@ hub.endpoints:
     uri: ws://192.168.1.20:8765/hub
     credentialRef: hub-token-office
     enabled: true
+    registerAgent: true
 ```
 
 Hub listener 设置属于运行 Broker 的节点：
@@ -109,16 +106,17 @@ hub.server:
   credentialRef: hub-server-token
 ```
 
-Endpoint Agent 设置属于拥有所发布工作区和会话的 Host。远程连接设置以及选中的远程工作区属于客户端 profile。更换 Broker 只改变连接设置和凭据，不改变已发布资源的所有权。
+`registerAgent: true` 让节点通过该 Hub 注册自己的 Host。`agentEndpointId` 是节点拥有的稳定身份，并保存在同一个设置命名空间中。节点可以在保留 Client 连接的同时关闭 Agent 注册。更换 Hub 只改变连接和凭据，不改变已发布资源的所有权。
 
 凭据通过 Harness credentials 服务保存。浏览器 localStorage 只保存已选择的工作区 ID 和界面状态，不保存认证 Token。
 
 ## 设置页面
 
-Hub 设置页包含两个区域：
+Hub 设置页包含三个职责：
 
-- **远程连接**管理多个 Hub 连接、连接测试、启用状态、删除、连接状态，以及加载到首页的远程工作区。
+- **Hub 连接**管理多个 Hub 连接、连接测试、启用状态、删除、连接状态、是否注册本地 Agent，以及加载到首页的远程工作区。
 - **本机作为 Hub**管理本机 Hub listener，包括启用状态、监听地址、端口、服务名称、凭据、生命周期控制，以及供其他客户端复制的连接地址。
+- **本机身份**管理节点注册到其他 Hub 时使用的稳定 `agentEndpointId`。
 
 小电脑图标只属于设置页面中的远程连接入口和远程端点条目，用于标识已配置的远程端点。首页项目列表不使用这个图标作为项目标记。
 
@@ -126,13 +124,15 @@ Hub 设置页包含两个区域：
 
 远程路径和工作目录描述的是所属 Host 的位置，不能当作本地路径处理。远程文件、进程、模型、会话和工作区操作都通过 API 在所属 Host 执行。本地客户端不会把远程路径传给本地 shell 或文件系统 provider。
 
-发现流程如下：
+发现与注册流程如下：
 
 ```text
-Web client -> list-endpoints
-Web client -> list-workspaces(endpointId)
-Web client -> select (endpointId, workspaceId)
-Web client -> Host API through the selected endpoint
+Hub -> issue connection credential
+Node -> import credential and optionally register its Agent
+Hub -> publish local and registered endpoint directories
+Client -> list-endpoints and list-workspaces
+Client -> select (endpointId, workspaceId)
+Client -> Host API through the selected endpoint
 ```
 
 ## 服务端生命周期

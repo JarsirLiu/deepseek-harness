@@ -151,7 +151,7 @@ export class HubServerManager {
 
   private async serverConfig(config: HubServerSettings): Promise<HubServerConfig> {
     const token = config.credentialEnabled === false ? undefined : config.credentialRef
-      ? (await this.ctx.credentials.resolve(credentialRef(config.credentialRef)))?.value
+      ? await ensureHubToken(this.ctx.credentials, this.identity(config))
       : undefined
     return {
       endpointId: config.endpointId,
